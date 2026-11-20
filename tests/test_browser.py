@@ -97,8 +97,11 @@ def test_core_flow_and_layout(app_url, width, height):
         assert page.evaluate("document.documentElement.scrollWidth") <= width
         row.get_by_role("button", name="Yes, log").click()
         expect(page.locator(".toast")).to_contain_text("Logged")
-        expect(row).to_be_hidden()
-        page.get_by_text("Next 7 days", exact=True).click()
+        if width < 768:
+            expect(row).to_be_hidden()
+            page.get_by_text("Next 7 days", exact=True).click()
+        else:
+            expect(row).to_be_visible()
         expect(page.locator(".due", has_text=f"Browser fern {width}")).to_contain_text("In 3 days")
         # Batch Done also waits for a second, explicit tap.
         page.get_by_role("button", name="Select", exact=True).click()
@@ -141,9 +144,13 @@ def test_core_flow_and_layout(app_url, width, height):
         # settings renders, weather card handles offline
         page.get_by_role("link", name="Settings", exact=True).click()
         expect(page.get_by_text("Weather location", exact=True)).to_be_visible()
-        expect(page.get_by_role("button", name="Send test", exact=True)).to_be_hidden()
+        if width < 768:
+            expect(page.get_by_role("button", name="Send test", exact=True)).to_be_hidden()
+        else:
+            expect(page.get_by_role("button", name="Send test", exact=True)).to_be_visible()
         # push section explains why it's off when the server has no VAPID keys
-        page.get_by_text("Push notifications", exact=True).click()
+        if width < 768:
+            page.get_by_text("Push notifications", exact=True).click()
         expect(page.locator("#push-status")).to_contain_text("isn't set up on the server")
         expect(page.locator("#push-on")).to_be_disabled()
         assert page.evaluate("document.documentElement.scrollWidth") <= width
@@ -177,7 +184,8 @@ def test_push_toggle_and_service_worker_notification(push_url, tmp_path, width, 
         page.on("pageerror", lambda e: errors.append(str(e)))
         sign_in(page, push_url)
         page.get_by_role("link", name="Settings", exact=True).click()
-        page.get_by_text("Push notifications", exact=True).click()
+        if width < 768:
+            page.get_by_text("Push notifications", exact=True).click()
         expect(page.locator("#push-status")).to_contain_text("Off for this device")
         expect(page.locator("#push-on")).to_be_enabled()
         toggle = page.locator("label.toggle", has=page.locator("#push-on")).bounding_box()
@@ -389,7 +397,8 @@ def test_api_token_sign_in_ui(app_url, width, height):
         page.locator("#auth-form button[type=submit]").click()
         expect(page.get_by_role("heading", name="Today", exact=True)).to_be_visible()
         page.get_by_role("link", name="Settings", exact=True).click()
-        page.get_by_text("Features", exact=True).click()
+        if width < 768:
+            page.get_by_text("Features", exact=True).click()
         page.locator('[data-feature="token_login"]').uncheck()
         page.get_by_role("button", name="Sign out").click()
         expect(page.get_by_role("button", name="Use API token")).to_have_count(0)
@@ -402,8 +411,34 @@ def test_api_token_sign_in_ui(app_url, width, height):
         page.locator("#auth-form button[type=submit]").click()
         expect(page.get_by_role("heading", name="Today", exact=True)).to_be_visible()
         page.get_by_role("link", name="Settings", exact=True).click()
-        page.get_by_text("Features", exact=True).click()
+        if width < 768:
+            page.get_by_text("Features", exact=True).click()
         page.locator('[data-feature="token_login"]').check()
+        browser.close()
+
+
+def test_disclosure_defaults_follow_viewport(app_url):
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 390, "height": 844})
+        sign_in(page, app_url)
+        weather = page.locator("details#weather")
+        expect(weather).to_have_js_property("open", False)
+
+        page.set_viewport_size({"width": 768, "height": 1024})
+        expect(weather).to_have_js_property("open", True)
+        page.get_by_role("link", name="Settings", exact=True).click()
+        app_name = page.get_by_role("textbox", name="App name")
+        notifications = page.get_by_role("button", name="Send test", exact=True)
+        expect(app_name).to_be_visible()
+        expect(notifications).to_be_visible()
+        app_name.fill("Unsaved app name")
+
+        page.set_viewport_size({"width": 390, "height": 844})
+        expect(app_name).to_be_hidden()
+        expect(notifications).to_be_hidden()
+        page.get_by_text("General", exact=True).click()
+        expect(app_name).to_have_value("Unsaved app name")
         browser.close()
 
 

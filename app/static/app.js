@@ -20,8 +20,9 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 
 const state = {
   me: null, settings: null, roomFilter: "", plantRoom: "", search: "",
-  selecting: false, selected: new Set(), upcomingOpen: false, weatherOpen: false,
+  selecting: false, selected: new Set(), upcomingOpen: null, weatherOpen: null,
 };
+const wideLayout = window.matchMedia("(min-width: 48rem)");
 
 let viewRevision = 0;
 
@@ -257,7 +258,7 @@ function weatherHtml(w) {
   if (!w || !w.configured || w.error) {
     const content = w?.error ? esc(w.error) : state.me.is_admin && !state.me.token_session
       ? '<a href="#/settings/weather">Set a weather location</a>' : "No weather location is set.";
-    return `<details class="disclosure weather" id="weather" ${state.weatherOpen ? "open" : ""}>
+    return `<details class="disclosure weather" id="weather" ${(state.weatherOpen ?? wideLayout.matches) ? "open" : ""}>
       <summary>${heading}${chevronIcon}</summary><div class="disclosure-body muted">${content}</div></details>`;
   }
   const u = w.units;
@@ -267,7 +268,7 @@ function weatherHtml(w) {
     <div class="wx-day"><b>${esc(d.short)}</b>${Math.round(d.high)}° / ${Math.round(d.low)}°
     <div class="wx-rain">${d.precip_probability ?? 0}%<span class="wx-amt"> · ${Number(d.precip || 0).toFixed(2)} ${esc(u.precipitation)}</span></div>
     <div class="muted">${esc(d.summary)}</div></div>`).join("");
-  return `<details class="disclosure weather" id="weather" ${state.weatherOpen ? "open" : ""}>
+  return `<details class="disclosure weather" id="weather" ${(state.weatherOpen ?? wideLayout.matches) ? "open" : ""}>
     <summary>${heading}<span class="disclosure-meta muted">${temperature} · ${esc(c.summary)}</span>${chevronIcon}</summary>
     <div class="disclosure-body weather-body">
       <div><b>${esc(w.location || "Weather")}</b>
@@ -345,7 +346,7 @@ async function renderToday() {
   weather.then((result) => {
     if (revision !== viewRevision || !state.me) return;
     $("#weather").outerHTML = weatherHtml(result);
-    $("#weather").ontoggle = (e) => { state.weatherOpen = e.currentTarget.open; };
+    $("#weather summary").onclick = () => { state.weatherOpen = !$("#weather").open; };
   });
 }
 
@@ -368,7 +369,7 @@ function drawCare(allItems, rooms, dueByPlant) {
     ${[[overdue, "Overdue", "overdue"], [today, "Due today", "today"]].map(([entries, title, style]) => entries.length ? `
       <section class="care-group"><h2 class="section-title ${style}">${title} <span class="section-count">${entries.length}</span></h2>${list(entries)}</section>` : "").join("")}
     ${overdue.length || today.length ? "" : `<p class="care-empty muted">${state.roomFilter ? "Nothing due today in this room." : "You're caught up for today."}</p>`}
-    ${upcoming.length ? `<details class="disclosure upcoming" id="upcoming" ${state.upcomingOpen ? "open" : ""}>
+    ${upcoming.length ? `<details class="disclosure upcoming" id="upcoming" ${(state.upcomingOpen ?? wideLayout.matches) ? "open" : ""}>
       <summary><span>Next 7 days</span><span class="disclosure-meta muted">${upcoming.length}</span>${chevronIcon}</summary>${list(upcoming)}
     </details>` : ""}
     <div class="batchbar" id="batchbar" hidden>
@@ -396,17 +397,19 @@ function drawCare(allItems, rooms, dueByPlant) {
     state.selecting = !state.selecting;
     redraw("#select-care");
   };
-  if ($("#upcoming")) $("#upcoming").ontoggle = (e) => {
-    state.upcomingOpen = e.currentTarget.open;
-    if (!state.upcomingOpen && state.selecting) {
-      $$("[data-select]:checked", e.currentTarget).forEach((cb) => {
+  const upcomingSection = $("#upcoming");
+  if (upcomingSection) {
+    $("summary", upcomingSection).onclick = () => { state.upcomingOpen = !upcomingSection.open; };
+    upcomingSection.ontoggle = () => {
+      if (upcomingSection.open || !state.selecting) return;
+      $$("[data-select]:checked", upcomingSection).forEach((cb) => {
         cb.checked = false;
         state.selected.delete(Number(cb.dataset.select));
         cb.closest(".due").classList.remove("sel");
       });
       updateBatchBar();
-    }
-  };
+    };
+  }
   $$(".due [data-select]", root).forEach((cb) => (cb.onchange = () => {
     const id = Number(cb.dataset.select);
     cb.checked ? state.selected.add(id) : state.selected.delete(id);
@@ -999,8 +1002,24 @@ function photoModal(p, after) {
 
 // ---------------------------------------------------------------- settings
 
+function setSettingsDisclosures(openSections, section) {
+  const expanded = wideLayout.matches;
+  for (const details of $$("#settings-list > details")) {
+    if (expanded) details.removeAttribute("name");
+    details.open = openSections ? openSections.has(details.id) : expanded || details.id === `settings-${section}`;
+    if (!expanded) details.setAttribute("name", "plants-settings");
+  }
+}
+
+wideLayout.addEventListener("change", () => {
+  const upcoming = $("#upcoming");
+  if (upcoming) upcoming.open = state.upcomingOpen ?? wideLayout.matches;
+  const weather = $("details#weather");
+  if (weather) weather.open = state.weatherOpen ?? wideLayout.matches;
+  setSettingsDisclosures(null, location.hash.split("/")[2]);
+});
+
 async function renderSettings(section) {
-  const openSection = section === undefined ? $("#settings-list details[open]")?.id : `settings-${section}`;
   const revision = ++viewRevision;
   if (state.me && state.me.token_session) {
     $("#view").innerHTML = `<section class="card stack"><h1 style="margin-top:0">Settings</h1>
@@ -1014,20 +1033,22 @@ async function renderSettings(section) {
     admin ? api("/api/notifications") : null, admin ? api("/api/users") : null,
   ]);
   if (revision !== viewRevision) return;
+  const openSections = section === undefined && $("#settings-list")
+    ? new Set($$("#settings-list > details[open]").map((details) => details.id)) : null;
   state.settings = settings;
   const hours = (sel) => Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === sel ? "selected" : ""}>${String(h).padStart(2, "0")}:00</option>`).join("");
   $("#view").innerHTML = `
     <h1>Settings</h1>
     <div id="settings-list">
     ${admin ? `
-    <details class="settings-item disclosure" name="plants-settings" id="settings-general">
+    <details class="settings-item disclosure" id="settings-general">
       <summary><span>General</span>${chevronIcon}</summary>
       <div class="disclosure-body stack">
         <div><label for="s-name">App name</label><div class="row"><input id="s-name" maxlength="60" value="${esc(settings.app_name)}" style="flex:1"><button id="s-name-save">Save</button></div></div>
         <div><label for="s-units">Units</label><select id="s-units"><option value="imperial" ${settings.units !== "metric" ? "selected" : ""}>°F, inches, mph</option><option value="metric" ${settings.units === "metric" ? "selected" : ""}>°C, mm, km/h</option></select></div>
       </div>
     </details>
-    <details class="settings-item disclosure" name="plants-settings" id="settings-features">
+    <details class="settings-item disclosure" id="settings-features">
       <summary><span>Features</span>${chevronIcon}</summary>
       <div class="disclosure-body stack">
         <p class="muted" >These switches apply to everyone in your household.</p>
@@ -1040,7 +1061,7 @@ async function renderSettings(section) {
         <div><button class="small" id="ql-reset">Reset all quick links</button></div>
       </div>
     </details>
-    <details class="settings-item disclosure" name="plants-settings" id="settings-weather">
+    <details class="settings-item disclosure" id="settings-weather">
       <summary><span>Weather location</span>${chevronIcon}</summary>
       <div class="disclosure-body stack">
         <p class="muted" >${settings.weather_name ? esc(settings.weather_name) : "No location set"}.</p>
@@ -1049,7 +1070,7 @@ async function renderSettings(section) {
         ${settings.weather_name ? '<button class="small ghost" id="wx-clear">Remove location</button>' : ""}
       </div>
     </details>
-    <details class="settings-item disclosure" name="plants-settings" id="settings-seasons">
+    <details class="settings-item disclosure" id="settings-seasons">
       <summary><span>Seasons</span>${chevronIcon}</summary>
       <div class="disclosure-body stack">
         <p class="muted" >Choose the winter months and how much to extend care intervals. Individual winter intervals take priority.</p>
@@ -1059,7 +1080,7 @@ async function renderSettings(section) {
         <button id="s-season-save">Save seasons</button>
       </div>
     </details>
-    <details class="settings-item disclosure" name="plants-settings" id="settings-notifications">
+    <details class="settings-item disclosure" id="settings-notifications">
       <summary><span>Notifications</span>${chevronIcon}</summary>
       <div class="disclosure-body stack">
         <p class="muted">Uses <a href="https://github.com/caronc/apprise/wiki" target="_blank" rel="noopener">Apprise</a> URLs, one per line: ntfy, Gotify, Pushover, email, Discord, Telegram and more. Alerts say "check soil", never "water now".</p>
@@ -1075,7 +1096,7 @@ async function renderSettings(section) {
         <div class="row"><button id="n-save">Save notifications</button><button id="n-test">Send test</button></div>
       </div>
     </details>` : ""}
-    <details class="settings-item disclosure" name="plants-settings" id="settings-push">
+    <details class="settings-item disclosure" id="settings-push">
       <summary><span>Push notifications</span>${chevronIcon}</summary>
       <div class="disclosure-body stack">
         <p class="muted">Get care reminders on this device, even when Plants is closed. Reminders follow the household’s notification schedule.</p>
@@ -1084,7 +1105,7 @@ async function renderSettings(section) {
         <div class="row" id="push-actions" hidden><button id="push-test">Send test push</button></div>
       </div>
     </details>
-    <details class="settings-item disclosure" name="plants-settings" id="settings-rooms">
+    <details class="settings-item disclosure" id="settings-rooms">
       <summary><span>Rooms</span>${chevronIcon}</summary>
       <div class="disclosure-body stack">
         <div id="rooms">${rooms.map((r) => `<div class="list-row"><span class="grow">${esc(r.name)} <span class="muted">· ${r.plants} plant${r.plants === 1 ? "" : "s"}</span></span>
@@ -1092,7 +1113,7 @@ async function renderSettings(section) {
         <div class="row"><input id="room-new" placeholder="New room" maxlength="60" style="flex:1" aria-label="New room name"><button id="room-add">Add room</button></div>
       </div>
     </details>
-    <details class="settings-item disclosure" name="plants-settings" id="settings-tokens">
+    <details class="settings-item disclosure" id="settings-tokens">
       <summary><span>API tokens</span>${chevronIcon}</summary>
       <div class="disclosure-body stack">
         <p class="muted">Let a script, home automation, or an AI assistant add plants from a tag photo, read what's due, and log care. <a href="/api/docs" target="_blank" rel="noopener">API docs</a></p>
@@ -1103,7 +1124,7 @@ async function renderSettings(section) {
       </div>
     </details>
     ${admin ? `
-    <details class="settings-item disclosure" name="plants-settings" id="settings-users">
+    <details class="settings-item disclosure" id="settings-users">
       <summary><span>Users</span>${chevronIcon}</summary>
       <div class="disclosure-body stack">
         <p class="muted">Everyone shares one set of plants. Each care entry records who logged it.</p>
@@ -1119,7 +1140,7 @@ async function renderSettings(section) {
         </form>
       </div>
     </details>
-    <details class="settings-item disclosure" name="plants-settings" id="settings-backup">
+    <details class="settings-item disclosure" id="settings-backup">
       <summary><span>Backup</span>${chevronIcon}</summary>
       <div class="disclosure-body stack">
         <p class="muted">Export everything, photos included, as one JSON file. Importing replaces all data and signs everyone out.</p>
@@ -1129,8 +1150,7 @@ async function renderSettings(section) {
     </details>` : ""}
     </div>
     <div class="mobile-account"><span class="muted">${esc(state.me.username)}</span><button type="button" class="ghost" id="settings-logout">Sign out</button></div>`;
-  const opened = document.getElementById(openSection);
-  if (opened?.closest("#settings-list")) opened.open = true;
+  setSettingsDisclosures(openSections, section);
   $("#settings-logout").onclick = () => signOut().catch(fail);
   bindSettings(admin);
   initPushSettings(admin);
