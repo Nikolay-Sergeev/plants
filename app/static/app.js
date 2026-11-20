@@ -253,31 +253,92 @@ function roomPicker(id, rooms, selected) {
   </select>`;
 }
 
+const weatherSymbols = [
+  [[0], "clear", '<circle cx="12" cy="12" r="4.5"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/>'],
+  [[1, 2], "bright", '<path d="M3 7h2m1-3 1.5 1.5M11 2v2m4.5 1.5L17 4m-2.2 6A4 4 0 1 0 7 12m.5 8a3.5 3.5 0 1 1 .7-6.9 5 5 0 0 1 9.4 1.9h1.4a2.5 2.5 0 1 1 0 5z"/>'],
+  [[3], "cloud", '<path d="M6.5 19a4 4 0 1 1 .8-7.9 5.5 5.5 0 0 1 10.5 2.4H19a2.75 2.75 0 0 1 0 5.5z"/>'],
+  [[45, 48], "cloud", '<path d="M5 13a3.2 3.2 0 1 1 1-6.2 5.2 5.2 0 0 1 9.9 1.4 2.6 2.6 0 1 1 3 4.8zM4 17h16M7 21h10"/>'],
+  [[51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82], "rain", '<path d="M6 15a3.5 3.5 0 1 1 .7-6.9 5 5 0 0 1 9.8 1.4H19a2.75 2.75 0 0 1 0 5.5zM9 18l-1 3m5-3-1 3m5-3-1 3"/>'],
+  [[71, 73, 75, 77, 85, 86], "cloud", '<path d="M6 14a3.5 3.5 0 1 1 .7-6.9 5 5 0 0 1 9.8 1.4H19a2.75 2.75 0 0 1 0 5.5zM7 18h.01m4 3h.01m2-3h.01m4 3h.01m2-3h.01"/>'],
+  [[95, 96, 99], "bright", '<path d="M8 14H6a3.5 3.5 0 1 1 .7-6.9 5 5 0 0 1 9.8 1.4H19a2.75 2.75 0 0 1 0 5.5h-2m-4-2-3 5h4l-2 5"/>'],
+];
+
+function weatherSymbol(code) {
+  const symbol = weatherSymbols.find(([codes]) => codes.includes(code));
+  return symbol ? `<span class="wx-symbol wx-${symbol[1]}">${glyph(symbol[2])}</span>` : "";
+}
+
+function weatherValue(value, unit, round = false) {
+  return Number.isFinite(value) ? `${round ? Math.round(value) : value}${esc(unit)}` : "—";
+}
+
 function weatherHtml(w) {
-  const heading = `<span>Weather</span>`;
-  if (!w || !w.configured || w.error) {
+  const open = (state.weatherOpen ?? wideLayout.matches) ? "open" : "";
+  if (!w?.configured || w.error) {
     const content = w?.error ? esc(w.error) : state.me.is_admin && !state.me.token_session
       ? '<a href="#/settings/weather">Set a weather location</a>' : "No weather location is set.";
-    return `<details class="disclosure weather" id="weather" ${(state.weatherOpen ?? wideLayout.matches) ? "open" : ""}>
-      <summary>${heading}${chevronIcon}</summary><div class="disclosure-body muted">${content}</div></details>`;
+    return `<details class="disclosure weather" id="weather" ${open}>
+      <summary><span>Weather</span>${chevronIcon}</summary><div class="disclosure-body muted">${content}</div></details>`;
   }
+
   const u = w.units;
   const c = w.current;
-  const temperature = `${Math.round(c.temperature)}${esc(u.temperature)}`;
-  const days = w.daily.map((d) => `
-    <div class="wx-day"><b>${esc(d.short)}</b>${Math.round(d.high)}° / ${Math.round(d.low)}°
-    <div class="wx-rain">${d.precip_probability ?? 0}%<span class="wx-amt"> · ${Number(d.precip || 0).toFixed(2)} ${esc(u.precipitation)}</span></div>
-    <div class="muted">${esc(d.summary)}</div></div>`).join("");
-  return `<details class="disclosure weather" id="weather" ${(state.weatherOpen ?? wideLayout.matches) ? "open" : ""}>
-    <summary>${heading}<span class="disclosure-meta muted">${temperature} · ${esc(c.summary)}</span>${chevronIcon}</summary>
+  const daily = w.daily;
+  const temperature = weatherValue(c.temperature, u.temperature, true);
+  const location = w.location || "Local weather";
+  const [city, ...region] = location.split(", ");
+  const temps = daily.flatMap(({ low, high }) => [low, high]).filter(Number.isFinite);
+  const min = temps.length ? Math.min(...temps) : 0;
+  const spread = temps.length ? Math.max(...temps) - min : 0;
+  const days = daily.map((d) => {
+    let range = "";
+    if (Number.isFinite(d.low) && Number.isFinite(d.high) && d.low <= d.high) {
+      const start = spread ? (d.low - min) / spread * 100 : 50;
+      const end = spread ? 100 - (d.high - min) / spread * 100 : 50;
+      range = `<span class="wx-range" style="--start:${start}%;--end:${end}%"></span>`;
+    }
+    const rain = Number.isFinite(d.precip_probability) && d.precip_probability > 0;
+    const details = [d.summary, rain ? `${d.precip_probability}% chance of precipitation` : "",
+      d.precip > 0 ? `${d.precip} ${u.precipitation} expected` : ""].filter(Boolean).join(" · ");
+    return `<li class="wx-day">
+      <span class="wx-day-name">${esc(d.short)}</span>
+      <span class="wx-condition" title="${esc(details)}">
+        <span aria-hidden="true">${weatherSymbol(d.code)}${rain ? `<small>${d.precip_probability}%</small>` : ""}</span>
+        <span class="sr-only">${esc(details)}</span>
+      </span>
+      <span class="wx-low"><span class="sr-only">Low </span>${weatherValue(d.low, "°", true)}</span>
+      <span class="wx-track" aria-hidden="true">${range}</span>
+      <span class="wx-high"><span class="sr-only">High </span>${weatherValue(d.high, "°", true)}</span>
+    </li>`;
+  }).join("");
+
+  return `<details class="disclosure weather weather-ready" id="weather" ${open}>
+    <summary><span>Weather</span><span class="disclosure-meta wx-summary">${temperature}${c.summary ? ` · ${esc(c.summary)}` : ""}</span>${chevronIcon}</summary>
     <div class="disclosure-body weather-body">
-      <div><b>${esc(w.location || "Weather")}</b>
-        <div class="muted">Humidity ${c.humidity}% · Rain ${c.precipitation} ${esc(u.precipitation)} · Wind ${Math.round(c.wind)} ${esc(u.wind)}</div>
+      <div class="wx-current">
+        <div>
+          <h2>${esc(city)}</h2>
+          ${region.length ? `<p class="wx-region">${esc(region.join(", "))}</p>` : ""}
+          <p class="wx-temperature">${temperature}</p>
+          ${c.summary ? `<p class="wx-description">${esc(c.summary)}</p>` : ""}
+          ${daily.length ? `<p class="wx-today-range">High ${weatherValue(daily[0].high, "°", true)} · Low ${weatherValue(daily[0].low, "°", true)}</p>` : ""}
+        </div>
+        <div class="wx-current-symbol" aria-hidden="true">${weatherSymbol(c.code)}</div>
       </div>
-      <div class="wx-days">${days}</div>
-      ${w.hint ? `<p class="wx-hint">${esc(w.hint)}</p>` : ""}
-      <div class="wx-foot">Next 5 days: ${w.rain_total} ${esc(u.precipitation)} of rain expected.
-        <a href="https://open-meteo.com/" target="_blank" rel="noopener">Weather by Open-Meteo</a>${w.stale ? " (cached)" : ""}</div>
+      <dl class="wx-stats">
+        <div><dt>Humidity</dt><dd>${weatherValue(c.humidity, "%")}</dd></div>
+        <div><dt>Wind</dt><dd>${weatherValue(c.wind, ` ${u.wind}`, true)}</dd></div>
+        <div><dt>Rain now</dt><dd>${weatherValue(c.precipitation, ` ${u.precipitation}`)}</dd></div>
+      </dl>
+      ${days ? `<section class="wx-forecast" aria-labelledby="weather-forecast-title">
+        <h2 id="weather-forecast-title">${daily.length}-day forecast</h2>
+        <ul class="wx-days" role="list">${days}</ul>
+      </section>` : ""}
+      ${w.hint ? `<p class="wx-hint">${leafIcon}<span>${esc(w.hint)}</span></p>` : ""}
+      <div class="wx-foot">
+        ${Number.isFinite(w.rain_total) && daily.length ? `<span>Rain over ${daily.length} days · ${weatherValue(w.rain_total, ` ${u.precipitation}`)}</span>` : ""}
+        <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>${w.stale ? "<span>Cached forecast</span>" : ""}
+      </div>
     </div></details>`;
 }
 

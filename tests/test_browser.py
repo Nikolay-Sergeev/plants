@@ -442,6 +442,43 @@ def test_disclosure_defaults_follow_viewport(app_url):
         browser.close()
 
 
+def test_weather_forecast_displays_conditions_and_missing_values(app_url):
+    forecast = {
+        "configured": True, "location": "Test City, Test Region",
+        "current": {"temperature": 23.4, "code": 0, "summary": "Clear",
+                    "humidity": 25, "wind": 16, "precipitation": 0},
+        "daily": [
+            {"short": "Today", "code": 0, "summary": "Clear", "low": 14, "high": 25, "precip_probability": 0},
+            {"short": "Sat", "code": 61, "summary": "Light rain", "low": None, "high": 22,
+             "precip_probability": 65, "precip": 5},
+            {"short": "Sun", "code": 3, "summary": "Cloudy", "low": 9, "high": 18, "precip_probability": 0},
+            {"short": "Mon", "code": 2, "summary": "Partly cloudy", "low": 10, "high": 22},
+            {"short": "Tue", "code": 45, "summary": "Fog", "low": 7, "high": 10},
+        ],
+        "rain_total": 5,
+        "hint": "Dry air; ferns and tropicals may want misting.",
+        "units": {"temperature": "°C", "precipitation": "mm", "wind": "km/h"},
+    }
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 390, "height": 844})
+        page.route("**/api/weather", lambda route: route.fulfill(json=forecast))
+        sign_in(page, app_url)
+        weather = page.locator("#weather")
+        expect(weather.locator("summary")).to_contain_text("23°C · Clear")
+        expect(weather.get_by_role("heading", name="5-day forecast")).to_be_hidden()
+        weather.locator("summary").click()
+        expect(weather.get_by_role("heading", name="Test City")).to_be_visible()
+        expect(weather.get_by_text("High 25° · Low 14°")).to_be_visible()
+        expect(weather.get_by_role("listitem")).to_have_count(5)
+        saturday = weather.get_by_role("listitem").filter(has_text="Sat")
+        expect(saturday).to_contain_text("65% chance of precipitation")
+        expect(saturday).to_contain_text("Low —")
+        expect(weather.get_by_text("Rain over 5 days · 5 mm")).to_be_visible()
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        browser.close()
+
+
 @pytest.mark.parametrize("width,height", [(1280, 900), (390, 844)])
 def test_sign_in_does_not_wait_for_weather(app_url, width, height):
     with sync_playwright() as p:
