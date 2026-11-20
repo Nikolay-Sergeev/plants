@@ -21,7 +21,12 @@ const state = { me: null, settings: null, roomFilter: "all", selected: new Set()
 
 let viewRevision = 0;
 
-class ApiError extends Error {}
+class ApiError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.status = status;
+  }
+}
 
 async function api(path, opts = {}) {
   const init = { method: opts.method || "GET", headers: {}, credentials: "same-origin" };
@@ -34,7 +39,7 @@ async function api(path, opts = {}) {
   if (res.status === 401 && !opts.allow401) {
     state.me = null;
     await showAuth();
-    throw new ApiError("Please sign in again");
+    throw new ApiError("Please sign in again", res.status);
   }
   const text = await res.text();
   let data = null;
@@ -42,7 +47,7 @@ async function api(path, opts = {}) {
   if (!res.ok) {
     let msg = (data && data.detail) || res.statusText;
     if (Array.isArray(msg)) msg = msg.map((d) => d.msg.replace(/^Value error, /, "")).join("; ");
-    throw new ApiError(msg);
+    throw new ApiError(msg, res.status);
   }
   return data;
 }
@@ -80,7 +85,7 @@ function whenText(days) {
 }
 
 function thumb(photo) {
-  const inner = photo && !state.me?.token_session ? `<img src="${esc(photo)}" alt="" loading="lazy">` : leafIcon;
+  const inner = photo && !state.me?.token_session ? `<img src="${esc(photo)}" alt="" loading="lazy" decoding="async">` : leafIcon;
   return `<span class="thumb" aria-hidden="true">${inner}</span>`;
 }
 
@@ -126,7 +131,7 @@ async function showAuth() {
   const renderForm = () => {
     $("#view").innerHTML = `
       <form class="card auth stack" id="auth-form">
-        <div class="auth-logo"><img src="/static/icon.svg" alt="" width="40" height="40">${esc(status.app_name)}</div>
+        <div class="auth-logo"><img src="/static/icon.svg?v=2" alt="" width="40" height="40">${esc(status.app_name)}</div>
         <h1>${setup ? "Set up Plants" : "Sign in"}</h1>
         ${setup ? '<p class="muted">Create the first account. It becomes the administrator.</p>' : ""}
         <div><label for="username">Username</label><input id="username" name="username" autocomplete="username" ${setup ? "required" : ""}></div>
@@ -174,8 +179,9 @@ $("#logout").onclick = async () => {
 async function boot() {
   try {
     state.me = await api("/api/me", { allow401: true });
-  } catch {
-    return showAuth();
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 401) return showAuth();
+    throw err;
   }
   if (state.me.token_session) {
     // API-token sign-in: limited to what the token API can do, so Settings stays out of reach.
@@ -216,7 +222,7 @@ async function route(moveFocus = false) {
     if (moveFocus && (location.hash || "#/") === hash) $("#view").focus({ preventScroll: true });
   } catch (err) {
     if ((location.hash || "#/") === hash &&
-        !(err instanceof ApiError && err.message === "Please sign in again")) fail(err);
+        !(err instanceof ApiError && err.status === 401)) fail(err);
   }
 }
 
@@ -1280,4 +1286,21 @@ async function initPushSettings(admin) {
 }
 
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
-boot();
+
+function start() {
+  boot().catch(() => {
+    state.me = null;
+    $("#top").hidden = true;
+    $("#view").innerHTML = `<section class="card auth stack">
+      <h1>Can't reach Plants</h1>
+      <p>Check your connection to the Plants server and try again.</p>
+      <button class="primary" id="retry" type="button">Try again</button>
+    </section>`;
+    $("#retry").onclick = () => {
+      $("#view").innerHTML = '<p class="muted" role="status">Loading Plants…</p>';
+      start();
+    };
+  });
+}
+
+start();

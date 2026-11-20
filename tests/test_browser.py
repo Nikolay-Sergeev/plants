@@ -466,3 +466,22 @@ def test_sign_in_failure_restores_submit_button(app_url):
         expect(page.locator("#auth-error")).to_contain_text("Invalid sign-in credentials")
         expect(page.get_by_role("button", name="Sign in", exact=True)).to_be_enabled()
         browser.close()
+
+
+def test_installed_shell_can_retry_after_offline_launch(app_url):
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        context = browser.new_context()
+        page = context.new_page()
+        sign_in(page, app_url)
+        page.wait_for_function("navigator.serviceWorker.controller !== null")
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        expect(page.get_by_role("heading", name="Can't reach Plants")).to_be_visible()
+        expect(page.get_by_role("heading", name="Today", exact=True)).to_have_count(0)
+
+        context.set_offline(False)
+        page.get_by_role("button", name="Try again").click()
+        expect(page.get_by_role("heading", name="Today", exact=True)).to_be_visible()
+        browser.close()
