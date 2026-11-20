@@ -104,7 +104,7 @@ def test_core_flow_and_layout(app_url, width, height):
             expect(row).to_be_visible()
         expect(page.locator(".due", has_text=f"Browser fern {width}")).to_contain_text("In 3 days")
         # Batch Done also waits for a second, explicit tap.
-        page.get_by_role("button", name="Select", exact=True).click()
+        page.get_by_role("button", name="Select tasks", exact=True).click()
         page.locator(".due", has_text=f"Browser fern {width}").first.locator("[data-select]").check()
         page.locator("[data-batch=done]").click()
         expect(page.locator(".batch-confirm")).to_be_visible()

@@ -159,30 +159,55 @@ h2 { margin: 0 0 12px; font-size: 1.25rem; letter-spacing: -0.025em; line-height
 }
 .account {
   margin-top: auto;
-  display: grid;
-  justify-items: start;
-  gap: 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
-  padding: 12px 4px 0;
+  padding: 12px 4px 0 8px;
   border-top: 1px solid var(--line);
 }
-.user-badge { max-width: 100%; padding-inline: 8px; color: var(--muted); font-size: 0.875rem; }
-#logout { color: var(--muted); }
+.account-avatar {
+  display: grid;
+  flex: 0 0 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--tint);
+  color: var(--accent);
+}
+.account .glyph { width: 17px; height: 17px; }
+.user-badge { font-size: 0.875rem; font-weight: 600; }
+#logout { margin-inline-start: auto; flex: none; padding: 0; color: var(--muted); }
+#logout:hover { background: var(--panel2); color: var(--text); }
+#logout span { display: none; }
 
 /* Today */
 .today-date { margin: 7px 0 0; color: var(--muted); font-size: 0.9375rem; }
-.today-layout { display: grid; gap: 14px; margin-top: 20px; }
+.today-layout { display: grid; gap: 14px; margin-top: 16px; }
 .today-layout > * { min-width: 0; }
-.care-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
-.care-toolbar button { margin-inline-start: auto; color: var(--accent); }
+.care-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 20px; }
+.care-select { background: var(--panel); border-color: var(--line); }
+.care-select:hover { background: var(--panel2); }
+.care-select .glyph { width: 17px; height: 17px; color: var(--accent); }
 .room-picker { width: auto; max-width: min(48%, 13rem); background-color: var(--panel); }
-.care-group { position: relative; margin-bottom: 20px; }
-.care-empty { margin: 0 0 18px; }
-.section-title { display: flex; align-items: baseline; gap: 7px; margin: 0 0 8px; font-size: 1.125rem; }
-.section-count { color: var(--muted); font-size: 0.875rem; font-weight: 550; }
-.care-group:has(.select-all) .section-title { min-height: 44px; align-items: center; padding-inline-end: 88px; }
+.care-group { position: relative; }
+.care-group + :is(.care-group, .upcoming) { margin-top: 14px; }
+.care-empty { flex: 1 1 13rem; margin: 0; font-size: 0.875rem; }
+.care-toolbar button + .care-empty { padding-inline-start: 4px; }
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 50px;
+  margin: 0;
+  padding: 9px 13px;
+  font-size: 1rem;
+  font-weight: 660;
+}
+.section-count { margin-inline-start: auto; color: var(--muted); font-size: 0.875rem; font-weight: 550; }
+.care-group:has(.select-all) .section-title { padding-inline-end: 92px; }
 .select-all { display: block; margin-inline-start: auto; }
-.care-group > .select-all { position: absolute; inset: 0 4px auto auto; }
+.care-group > .select-all { position: absolute; inset: 3px 4px auto auto; }
 .badge, .status {
   display: inline-block;
   font-size: 0.8125rem;
@@ -195,7 +220,7 @@ h2 { margin: 0 0 12px; font-size: 1.25rem; letter-spacing: -0.025em; line-height
 }
 .status.overdue { background: var(--bad-bg); color: var(--bad); }
 .status.today { background: var(--warn-bg); color: var(--warn); }
-.due-list { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; }
+.due-list { border-top: 1px solid var(--line); }
 .due {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -204,7 +229,7 @@ h2 { margin: 0 0 12px; font-size: 1.25rem; letter-spacing: -0.025em; line-height
   padding: 10px 7px 10px 12px;
   border-top: 1px solid var(--line);
 }
-.due:first-child { border-top: 0; border-radius: 15px 15px 0 0; }
+.due:first-child { border-top: 0; }
 .due:last-child { border-bottom-right-radius: 15px; border-bottom-left-radius: 15px; }
 .due.sel { background: var(--tint); }
 .checkwrap { display: grid; place-items: center; width: 44px; min-height: 44px; margin: 0; cursor: pointer; }
@@ -290,8 +315,6 @@ h2 { margin: 0 0 12px; font-size: 1.25rem; letter-spacing: -0.025em; line-height
 .disclosure-body { padding: 0 13px 13px; overflow-wrap: anywhere; }
 .disclosure-body > :first-child { margin-top: 0; }
 .disclosure-body > :last-child { margin-bottom: 0; }
-.upcoming .due-list { border: 0; border-top: 1px solid var(--line); border-radius: 0 0 15px 15px; }
-.upcoming .due:first-child { border-radius: 0; }
 .weather-loading { min-height: 50px; display: grid; align-items: center; padding-inline: 13px; }
 .weather-ready { container-type: inline-size; }
 .wx-summary { color: var(--muted); }
@@ -574,6 +597,7 @@ body:has(.modal[open]) { overflow: hidden; }
 
 @media (min-width: 76rem) {
   .today-layout { grid-template-columns: minmax(0, 1fr) clamp(225px, 21vw, 296px); align-items: start; }
+  .today-layout:has(#care-list[hidden]) { grid-template-columns: minmax(0, 296px); }
 }
 @media (max-width: 48rem) {
   body:has(.top:not([hidden])) { --tab-space: calc(66px + env(safe-area-inset-bottom)); }
@@ -601,7 +625,9 @@ body:has(.modal[open]) { overflow: hidden; }
   .logo { padding-inline: 4px; font-size: 1.0625rem; }
   .logo img { width: 32px; height: 32px; border-radius: 9px; }
   .account { border: 0; margin: 0; padding: 0; }
-  .user-badge { display: none; }
+  .account-avatar, .user-badge { display: none; }
+  #logout { padding-inline: 12px; }
+  #logout span { display: inline; }
   .tabs {
     position: fixed;
     z-index: 12;
@@ -629,7 +655,9 @@ body:has(.modal[open]) { overflow: hidden; }
   .tab.active { background: transparent; }
   .tab.active:not(:focus-visible) { box-shadow: none; }
   .card { padding: 15px; }
-  .today-layout { margin-top: 14px; }
+  .care-toolbar { margin-top: 16px; }
+  .care-toolbar button + .care-empty { padding-inline-start: 0; }
+  .today-layout { margin-top: 12px; }
   .due { padding-inline: 9px 4px; }
   .due-plant { gap: 8px; }
   .due-actions button { padding-inline: 6px; }
@@ -656,6 +684,8 @@ body:has(.modal[open]) { overflow: hidden; }
   .sheet-actions button { flex: 1 1 auto; }
 }
 @media (max-width: 22rem) {
+  .care-toolbar .room-picker { max-width: 40%; }
+  .care-select { padding-inline: 8px; }
   .due-plant { grid-template-columns: 36px minmax(0, 1fr); }
   .due .thumb { width: 36px; height: 36px; }
 }

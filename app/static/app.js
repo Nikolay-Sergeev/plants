@@ -12,6 +12,7 @@ const addIcon = glyph('<path d="M12 5v14M5 12h14"/>');
 const searchIcon = glyph('<circle cx="10.5" cy="10.5" r="5.5"/><path d="m15 15 4 4"/>');
 const moreIcon = glyph('<path d="M5 12h.01m6.99 0h.01m6.99 0h.01" stroke-width="3"/>');
 const chevronIcon = glyph('<path d="m7 10 5 5 5-5"/>');
+const selectIcon = glyph('<rect x="4" y="4" width="16" height="16" rx="4"/><path d="m8 12 2.5 2.5L16 9"/>');
 const KINDS = [["water", "Water"], ["fertilize", "Fertilize"], ["mist", "Mist"], ["repot", "Repot"], ["rotate", "Rotate"], ["custom", "Custom"]];
 // Starting intervals when a task type is picked; always editable.
 const KIND_DAYS = { water: 7, fertilize: 30, mist: 3, repot: 365, rotate: 7, custom: 14 };
@@ -406,6 +407,7 @@ async function renderToday() {
   const dateLabel = new Intl.DateTimeFormat(undefined, { weekday: "long", month: "long", day: "numeric" }).format(new Date());
   $("#view").innerHTML = `
     <header class="pagehead"><div><h1>Today</h1><p class="today-date"><time datetime="${localToday()}">${esc(dateLabel)}</time></p></div></header>
+    <div class="care-toolbar" id="care-controls"></div>
     <div class="today-layout">
       <div id="care-list"></div>
       <section class="disclosure weather" id="weather" aria-busy="true"><div class="weather-loading muted">Loading weather...</div></section>
@@ -429,14 +431,16 @@ function drawCare(allItems, rooms, dueByPlant) {
   const list = (entries) => `
     ${state.selecting && entries.length > 1 ? '<button type="button" class="small ghost select-all" data-selectgroup>Select all</button>' : ""}
     <div class="due-list">${entries.map(dueRow).join("")}</div>`;
+  $("#care-controls").innerHTML = `
+    ${roomPicker("today-room", rooms, state.roomFilter)}
+    ${items.length ? `<button type="button" class="small care-select" id="select-care">
+      ${selectIcon}${state.selecting ? "Cancel selection" : "Select tasks"}
+    </button>` : ""}
+    ${overdue.length || today.length ? "" : `<p class="care-empty muted">${state.roomFilter ? "Nothing due today in this room." : "You're caught up for today."}</p>`}`;
+  root.hidden = !items.length;
   root.innerHTML = `
-    ${items.length || rooms.length > 1 ? `<div class="care-toolbar">
-      ${roomPicker("today-room", rooms, state.roomFilter)}
-      ${items.length ? `<button type="button" class="small ghost" id="select-care">${state.selecting ? "Cancel selection" : "Select"}</button>` : ""}
-    </div>` : ""}
-    ${[[overdue, "Overdue", "overdue"], [today, "Due today", "today"]].map(([entries, title, style]) => entries.length ? `
-      <section class="care-group"><h2 class="section-title ${style}">${title} <span class="section-count">${entries.length}</span></h2>${list(entries)}</section>` : "").join("")}
-    ${overdue.length || today.length ? "" : `<p class="care-empty muted">${state.roomFilter ? "Nothing due today in this room." : "You're caught up for today."}</p>`}
+    ${[[overdue, "Overdue"], [today, "Due today"]].map(([entries, title]) => entries.length ? `
+      <section class="disclosure care-group"><h2 class="section-title">${title} <span class="section-count">${entries.length}</span></h2>${list(entries)}</section>` : "").join("")}
     ${upcoming.length ? `<details class="disclosure upcoming" id="upcoming" ${(state.upcomingOpen ?? wideLayout.matches) ? "open" : ""}>
       <summary><span>Next 7 days</span><span class="disclosure-meta muted">${upcoming.length}</span>${chevronIcon}</summary>${list(upcoming)}
     </details>` : ""}
