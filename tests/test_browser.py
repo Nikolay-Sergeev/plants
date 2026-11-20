@@ -176,8 +176,11 @@ def push_url(tmp_path_factory):
 def test_push_toggle_and_service_worker_notification(push_url, tmp_path, width, height):
     # Full Chromium in a persistent profile: the headless shell and incognito contexts have no push.
     with sync_playwright() as p:
-        ctx = p.chromium.launch_persistent_context(str(tmp_path / "profile"), channel="chromium",
-                                                   viewport={"width": width, "height": height})
+        ctx = p.chromium.launch_persistent_context(
+            str(tmp_path / "profile"),
+            channel="chromium",
+            viewport={"width": width, "height": height},
+        )
         ctx.grant_permissions(["notifications"], origin=push_url)
         page = ctx.new_page()
         errors = []
@@ -191,28 +194,47 @@ def test_push_toggle_and_service_worker_notification(push_url, tmp_path, width, 
         toggle = page.locator("label.toggle", has=page.locator("#push-on")).bounding_box()
         assert width > 650 or toggle["height"] >= 44
         assert page.evaluate("document.documentElement.scrollWidth") <= width
-        # the service worker turns a push message into a notification that points at Today
+        # Observe the real showNotification() result before the host can dismiss the notification.
+        page.wait_for_function("navigator.serviceWorker.controller?.state === 'activated'")
+        worker, = ctx.service_workers
+        worker.evaluate("""() => {
+            const registration = self.registration;
+            const show = registration.showNotification.bind(registration);
+            self.notificationShown = new Promise(resolve => {
+                registration.showNotification = (title, options) => {
+                    const result = show(title, options);
+                    result.then(
+                        () => resolve({title, body: options.body, tag: options.tag, url: options.data?.url}),
+                        error => resolve({error: String(error)}),
+                    );
+                    return result;
+                };
+            });
+        }""")
+
         cdp = ctx.new_cdp_session(page)
         regs = []
         cdp.on("ServiceWorker.workerRegistrationUpdated", lambda e: regs.extend(e["registrations"]))
         cdp.send("ServiceWorker.enable")
-        page.evaluate("navigator.serviceWorker.ready.then(() => true)")
         for _ in range(50):
             if regs:
                 break
             page.wait_for_timeout(100)
-        reg_id = [r for r in regs if not r["isDeleted"]][0]["registrationId"]
+        reg_id = next(r["registrationId"] for r in regs if not r["isDeleted"] and r["scopeURL"] == push_url + "/")
+        message = {
+            "title": "Plants: 1 plant to check",
+            "body": "Water check: Fern - due today",
+            "tag": "plants-due",
+            "url": "/#/",
+        }
         cdp.send("ServiceWorker.deliverPushMessage", {
-            "origin": push_url, "registrationId": reg_id,
-            "data": '{"title":"Plants: 1 plant to check","body":"Water check: Fern - due today","tag":"plants-due","url":"/#/"}'})
-        shown = []
-        for _ in range(50):
-            shown = page.evaluate("navigator.serviceWorker.ready.then(r => r.getNotifications())"
-                                  ".then(ns => ns.map(n => ({title: n.title, tag: n.tag, url: n.data.url})))")
-            if shown:
-                break
-            page.wait_for_timeout(100)
-        assert shown == [{"title": "Plants: 1 plant to check", "tag": "plants-due", "url": "/#/"}]
+            "origin": push_url, "registrationId": reg_id, "data": json.dumps(message),
+        })
+        shown = worker.evaluate("""() => Promise.race([
+            self.notificationShown,
+            new Promise(resolve => setTimeout(() => resolve({error: "No notification shown"}), 5000)),
+        ])""")
+        assert shown == message
         assert not errors, errors
         ctx.close()
 
