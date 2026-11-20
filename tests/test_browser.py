@@ -79,6 +79,13 @@ def test_core_flow_and_layout(app_url, width, height):
         box = row.get_by_role("button", name="Done").bounding_box()
         assert width > 650 or box["height"] >= 44
         assert page.evaluate("document.documentElement.scrollWidth") <= width
+        expect(row.get_by_role("checkbox")).to_have_count(0)
+        row.get_by_role("button", name=f"More actions for Browser fern {width}").click()
+        actions = page.get_by_role("dialog", name=f"Browser fern {width}")
+        expect(actions.get_by_role("button", name="Skip this check")).to_be_visible()
+        actions.get_by_role("button", name="Snooze", exact=True).click()
+        expect(page.get_by_role("dialog", name="Snooze")).to_be_visible()
+        page.keyboard.press("Escape")
         row.get_by_role("button", name="Done").click()
         expect(row.locator(".due-confirm")).to_be_visible()
         assert page.locator(".timeline").count() == 0
@@ -90,15 +97,18 @@ def test_core_flow_and_layout(app_url, width, height):
         assert page.evaluate("document.documentElement.scrollWidth") <= width
         row.get_by_role("button", name="Yes, log").click()
         expect(page.locator(".toast")).to_contain_text("Logged")
+        expect(row).to_be_hidden()
+        page.get_by_text("Next 7 days", exact=True).click()
         expect(page.locator(".due", has_text=f"Browser fern {width}")).to_contain_text("In 3 days")
         # Batch Done also waits for a second, explicit tap.
+        page.get_by_role("button", name="Select", exact=True).click()
         page.locator(".due", has_text=f"Browser fern {width}").first.locator("[data-select]").check()
         page.locator("[data-batch=done]").click()
         expect(page.locator(".batch-confirm")).to_be_visible()
         expect(page.locator(".due", has_text=f"Browser fern {width}").first).to_contain_text("In 3 days")
         page.locator("[data-batch-cancel]").click()
         expect(page.locator(".batch-confirm")).to_be_hidden()
-        page.locator("[data-batch=clear]").click()
+        page.get_by_role("button", name="Cancel selection").click()
         # plants list and detail
         page.get_by_role("link", name="Plants", exact=True).click()
         page.locator(".plant-card", has_text=f"Browser fern {width}").first.click()
@@ -130,9 +140,10 @@ def test_core_flow_and_layout(app_url, width, height):
         page.screenshot(path=f"/tmp/plants-info-{width}.png", full_page=True)
         # settings renders, weather card handles offline
         page.get_by_role("link", name="Settings", exact=True).click()
-        expect(page.get_by_role("heading", name="Weather location")).to_be_visible()
+        expect(page.get_by_text("Weather location", exact=True)).to_be_visible()
+        expect(page.get_by_role("button", name="Send test", exact=True)).to_be_hidden()
         # push section explains why it's off when the server has no VAPID keys
-        expect(page.get_by_role("heading", name="Push notifications")).to_be_visible()
+        page.get_by_text("Push notifications", exact=True).click()
         expect(page.locator("#push-status")).to_contain_text("isn't set up on the server")
         expect(page.locator("#push-on")).to_be_disabled()
         assert page.evaluate("document.documentElement.scrollWidth") <= width
@@ -166,7 +177,7 @@ def test_push_toggle_and_service_worker_notification(push_url, tmp_path, width, 
         page.on("pageerror", lambda e: errors.append(str(e)))
         sign_in(page, push_url)
         page.get_by_role("link", name="Settings", exact=True).click()
-        expect(page.get_by_role("heading", name="Push notifications")).to_be_visible()
+        page.get_by_text("Push notifications", exact=True).click()
         expect(page.locator("#push-status")).to_contain_text("Off for this device")
         expect(page.locator("#push-on")).to_be_enabled()
         toggle = page.locator("label.toggle", has=page.locator("#push-on")).bounding_box()
@@ -378,6 +389,7 @@ def test_api_token_sign_in_ui(app_url, width, height):
         page.locator("#auth-form button[type=submit]").click()
         expect(page.get_by_role("heading", name="Today", exact=True)).to_be_visible()
         page.get_by_role("link", name="Settings", exact=True).click()
+        page.get_by_text("Features", exact=True).click()
         page.locator('[data-feature="token_login"]').uncheck()
         page.get_by_role("button", name="Sign out").click()
         expect(page.get_by_role("button", name="Use API token")).to_have_count(0)
@@ -390,6 +402,7 @@ def test_api_token_sign_in_ui(app_url, width, height):
         page.locator("#auth-form button[type=submit]").click()
         expect(page.get_by_role("heading", name="Today", exact=True)).to_be_visible()
         page.get_by_role("link", name="Settings", exact=True).click()
+        page.get_by_text("Features", exact=True).click()
         page.locator('[data-feature="token_login"]').check()
         browser.close()
 

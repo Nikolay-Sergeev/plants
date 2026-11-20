@@ -8,16 +8,20 @@ const esc = (v) =>
 const glyph = (shape) => `<svg class="glyph" viewBox="0 0 24 24" aria-hidden="true">${shape}</svg>`;
 const leafIcon = glyph('<path d="M5 19c0-8 5-14 15-14 0 9-4 14-10 14a5 5 0 0 1-5-5m-1 7 11-11"/>');
 const dropIcon = glyph('<path d="M12 3c-3.4 4.4-6.5 7.7-6.5 11.5a6.5 6.5 0 0 0 13 0C18.5 10.7 15.4 7.4 12 3Zm-3 12a3 3 0 0 0 3 3"/>');
-const checkIcon = glyph('<circle cx="12" cy="12" r="8.5"/><path d="m8.5 12 2.3 2.3 4.7-4.7"/>');
 const addIcon = glyph('<path d="M12 5v14M5 12h14"/>');
 const searchIcon = glyph('<circle cx="10.5" cy="10.5" r="5.5"/><path d="m15 15 4 4"/>');
+const moreIcon = glyph('<path d="M5 12h.01m6.99 0h.01m6.99 0h.01" stroke-width="3"/>');
+const chevronIcon = glyph('<path d="m7 10 5 5 5-5"/>');
 const KINDS = [["water", "Water"], ["fertilize", "Fertilize"], ["mist", "Mist"], ["repot", "Repot"], ["rotate", "Rotate"], ["custom", "Custom"]];
 // Starting intervals when a task type is picked; always editable.
 const KIND_DAYS = { water: 7, fertilize: 30, mist: 3, repot: 365, rotate: 7, custom: 14 };
 const feature = (name) => !state.settings || state.settings[`feature_${name}`] !== false;
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-const state = { me: null, settings: null, roomFilter: "all", selected: new Set(), search: "", plantRoom: "all" };
+const state = {
+  me: null, settings: null, roomFilter: "", plantRoom: "", search: "",
+  selecting: false, selected: new Set(), upcomingOpen: false, weatherOpen: false,
+};
 
 let viewRevision = 0;
 
@@ -166,13 +170,16 @@ async function showAuth() {
   renderForm();
 }
 
-$("#logout").onclick = async () => {
+async function signOut() {
   await pushOff().catch(() => {}); // a shared device shouldn't keep getting the last person's reminders
   await api("/api/logout", { method: "POST", allow401: true });
   state.me = null;
+  state.selecting = false;
+  state.selected.clear();
   location.hash = "#/";
   showAuth();
-};
+}
+$("#logout").onclick = () => signOut().catch(fail);
 
 // ---------------------------------------------------------------- routing
 
@@ -195,6 +202,7 @@ async function boot() {
     document.title = state.settings.app_name;
   }
   $("#top").hidden = false;
+  $("#top").classList.toggle("token-session", state.me.token_session === true);
   $("#user-badge").textContent = state.me.username + (state.me.token_session ? " (token)" : "");
   $$(".tab").forEach((t) => { t.hidden = state.me.token_session && t.dataset.tab === "settings"; });
   $("#view").innerHTML = '<section class="card" aria-busy="true"><p class="muted">Loading plants...</p></section>';
@@ -208,6 +216,10 @@ async function route(moveFocus = false) {
   const hash = location.hash || "#/";
   const m = hash.match(/^#\/plant\/(\d+)/);
   const tab = m || hash.startsWith("#/plants") ? "plants" : hash.startsWith("#/settings") ? "settings" : "today";
+  if (tab !== "today") {
+    state.selecting = false;
+    state.selected.clear();
+  }
   $$(".tab").forEach((t) => {
     const active = t.dataset.tab === tab;
     t.classList.toggle("active", active);
@@ -217,7 +229,7 @@ async function route(moveFocus = false) {
   try {
     if (m) await renderPlant(Number(m[1]));
     else if (tab === "plants") await renderPlants();
-    else if (tab === "settings") await renderSettings();
+    else if (tab === "settings") await renderSettings(hash.split("/")[2] || "");
     else await renderToday();
     if (moveFocus && (location.hash || "#/") === hash) $("#view").focus({ preventScroll: true });
   } catch (err) {
@@ -232,47 +244,58 @@ async function refresh() { await route(); }
 
 // ---------------------------------------------------------------- today
 
+function roomPicker(id, rooms, selected) {
+  if (rooms.length < 2) return "";
+  return `<select class="room-picker" id="${id}" aria-label="Filter by room">
+    <option value="">All rooms</option>
+    ${rooms.map((r) => `<option value="${esc(r)}" ${r === selected ? "selected" : ""}>${esc(r)}</option>`).join("")}
+  </select>`;
+}
+
 function weatherHtml(w) {
-  if (!w || !w.configured) {
-    return `<section class="card weather" id="weather"><h2>Weather</h2><div class="muted">
-      ${state.me.is_admin && !state.me.token_session ? '<a href="#/settings">Set a weather location</a>' : "No weather location is set."}</div></section>`;
+  const heading = `<span>Weather</span>`;
+  if (!w || !w.configured || w.error) {
+    const content = w?.error ? esc(w.error) : state.me.is_admin && !state.me.token_session
+      ? '<a href="#/settings/weather">Set a weather location</a>' : "No weather location is set.";
+    return `<details class="disclosure weather" id="weather" ${state.weatherOpen ? "open" : ""}>
+      <summary>${heading}${chevronIcon}</summary><div class="disclosure-body muted">${content}</div></details>`;
   }
-  if (w.error) return `<section class="card weather" id="weather"><h2>Weather</h2><div class="muted">${esc(w.location)}: ${esc(w.error)}</div></section>`;
   const u = w.units;
   const c = w.current;
+  const temperature = `${Math.round(c.temperature)}${esc(u.temperature)}`;
   const days = w.daily.map((d) => `
     <div class="wx-day"><b>${esc(d.short)}</b>${Math.round(d.high)}° / ${Math.round(d.low)}°
     <div class="wx-rain">${d.precip_probability ?? 0}%<span class="wx-amt"> · ${Number(d.precip || 0).toFixed(2)} ${esc(u.precipitation)}</span></div>
     <div class="muted">${esc(d.summary)}</div></div>`).join("");
-  return `<section class="card weather" id="weather"><h2>Weather</h2>
-    <div class="wx-now">
-      <div class="wx-temp">${Math.round(c.temperature)}${esc(u.temperature)}</div>
-      <div><b>${esc(w.location || "Weather")}</b><div>${esc(c.summary)}</div>
-      <div class="muted">Humidity ${c.humidity}% · Rain ${c.precipitation} ${esc(u.precipitation)} now · Wind ${Math.round(c.wind)} ${esc(u.wind)}</div></div>
-    </div>
-    <div class="wx-days">${days}</div>
-    ${w.hint ? `<p class="wx-hint">${esc(w.hint)}</p>` : ""}
-    <div class="wx-foot">Next 5 days: ${w.rain_total} ${esc(u.precipitation)} of rain expected. Weather never changes your schedules.
-      <a href="https://open-meteo.com/" target="_blank" rel="noopener">Weather data by Open-Meteo.com</a>${w.stale ? " (showing cached data)" : ""}</div>
-  </section>`;
+  return `<details class="disclosure weather" id="weather" ${state.weatherOpen ? "open" : ""}>
+    <summary>${heading}<span class="disclosure-meta muted">${temperature} · ${esc(c.summary)}</span>${chevronIcon}</summary>
+    <div class="disclosure-body weather-body">
+      <div><b>${esc(w.location || "Weather")}</b>
+        <div class="muted">Humidity ${c.humidity}% · Rain ${c.precipitation} ${esc(u.precipitation)} · Wind ${Math.round(c.wind)} ${esc(u.wind)}</div>
+      </div>
+      <div class="wx-days">${days}</div>
+      ${w.hint ? `<p class="wx-hint">${esc(w.hint)}</p>` : ""}
+      <div class="wx-foot">Next 5 days: ${w.rain_total} ${esc(u.precipitation)} of rain expected.
+        <a href="https://open-meteo.com/" target="_blank" rel="noopener">Weather by Open-Meteo</a>${w.stale ? " (cached)" : ""}</div>
+    </div></details>`;
 }
 
 function dueRow(i) {
   const sel = state.selected.has(i.task_id);
   return `<div class="due ${sel ? "sel" : ""}" data-task="${i.task_id}" role="group" aria-labelledby="due-name-${i.task_id}">
-    <label class="checkwrap"><input class="check" type="checkbox" aria-label="Select ${esc(i.label)} for ${esc(i.plant_name)}" ${sel ? "checked" : ""} data-select="${i.task_id}"></label>
     <a class="due-plant" href="#/plant/${i.plant_id}" aria-labelledby="due-name-${i.task_id}" aria-describedby="due-status-${i.task_id}">${thumb(i.photo)}
       <span class="due-main">
         <span class="due-name" id="due-name-${i.task_id}">${esc(i.plant_name)}</span>
-        <span class="due-when" id="due-status-${i.task_id}">${esc(i.label)} <span class="status ${i.state}">${whenText(i.days)}</span></span>
-        <span class="due-meta">${esc([i.room, i.outdoor ? "Outdoor" : "", i.reason].filter(Boolean).join(" · "))}</span>
+        <span class="due-when" id="due-status-${i.task_id}">${esc(i.label)}${i.days !== 0
+          ? ` <span class="due-date ${i.state}">· ${whenText(i.days)}</span>` : ""}</span>
       </span>
     </a>
-    <div class="due-actions">
-      <button class="primary due-done" data-act="done" data-id="${i.task_id}">Done</button>
-      <button class="ghost" data-act="snooze" data-id="${i.task_id}" data-plant="${i.plant_id}" data-plantdue="${i.plant_due || 0}" data-name="${esc(i.plant_name)}">Snooze</button>
-      <button class="ghost" data-act="skip" data-id="${i.task_id}" title="Checked it, doesn't need it yet">Skip</button>
-    </div>
+    ${state.selecting
+      ? `<label class="checkwrap"><input class="check" type="checkbox" aria-label="Select ${esc(i.label)} for ${esc(i.plant_name)}" ${sel ? "checked" : ""} data-select="${i.task_id}"></label>`
+      : `<div class="due-actions">
+        <button class="due-done" data-act="done" data-id="${i.task_id}">Done</button>
+        <button class="icon-btn ghost" aria-label="More actions for ${esc(i.plant_name)}" data-care-more="${i.task_id}">${moreIcon}</button>
+      </div>`}
     <div class="due-confirm" hidden>
       <span>Log ${esc(i.label)} for ${esc(i.plant_name)}?</span>
       <button class="primary" data-confirm-done="${i.task_id}">Yes, log</button>
@@ -281,110 +304,148 @@ function dueRow(i) {
   </div>`;
 }
 
+function careOptions(item) {
+  openModal(`<h2>${esc(item.plant_name)}</h2>
+    <p class="care-option-label">${esc(item.label)}</p>
+    <p class="muted">${esc([item.room, item.outdoor ? "Outdoor" : "", item.reason].filter(Boolean).join(" · "))}</p>
+    ${item.kind === "water" ? '<p class="hint">Check the soil first. Skip if it’s still moist.</p>' : ""}
+    <div class="menu care-options">
+      <button id="more-snooze">Snooze</button>
+      <button id="more-skip">Skip this check</button>
+    </div><div class="sheet-actions"><button data-close>Cancel</button></div>`, (sheet) => {
+    $("#more-snooze", sheet).onclick = () => {
+      const whole = item.plant_due > 1 ? { plant: item.plant_id, name: item.plant_name, count: item.plant_due } : null;
+      snoozeMenu((days, all) => all ? snoozePlant(whole.plant, days, renderToday) : care(item.task_id, "snooze", { days }, renderToday), whole);
+    };
+    $("#more-skip", sheet).onclick = () => { closeModal(); care(item.task_id, "skip", {}, renderToday); };
+  });
+}
+
 async function renderToday() {
   const revision = ++viewRevision;
-  // Weather is optional: a cold upstream fetch must not hold up the care list.
+  // Weather loads independently so it cannot delay the care list.
   const weather = api("/api/weather", { allow401: true })
-    .catch(() => ({ configured: true, location: "Weather", error: "Weather unavailable right now." }));
+    .catch(() => ({ error: "Weather unavailable right now." }));
   const due = await api("/api/due?days=7");
   if (revision !== viewRevision || !state.me) return;
   const rooms = [...new Set(due.items.map((i) => i.room || "No room"))].sort();
-  if (state.roomFilter !== "all" && !rooms.includes(state.roomFilter)) state.roomFilter = "all";
-  const dueByPlant = {};
-  due.items.forEach((i) => { if (i.days <= 0) dueByPlant[i.plant_id] = (dueByPlant[i.plant_id] || 0) + 1; });
-  due.items.forEach((i) => (i.plant_due = dueByPlant[i.plant_id] || 0));
-  const items = due.items.filter((i) => state.roomFilter === "all" || (i.room || "No room") === state.roomFilter);
-  const visible = new Set(items.map((i) => i.task_id));
-  state.selected = new Set([...state.selected].filter((id) => visible.has(id)));
-  const groups = [
-    ["overdue", "Overdue", items.filter((i) => i.state === "overdue")],
-    ["today", "Due today", items.filter((i) => i.state === "today")],
-    ["upcoming", "Next 7 days", items.filter((i) => i.state === "upcoming")],
-  ];
-  const needNow = groups[0][2].length + groups[1][2].length;
-  const waterDue = items.some((i) => i.days <= 0 && i.kind === "water");
+  if (!rooms.includes(state.roomFilter)) state.roomFilter = "";
+  const dueByPlant = new Map();
+  due.items.forEach((i) => {
+    if (i.days <= 0) dueByPlant.set(i.plant_id, (dueByPlant.get(i.plant_id) || 0) + 1);
+  });
   const dateLabel = new Intl.DateTimeFormat(undefined, { weekday: "long", month: "long", day: "numeric" }).format(new Date());
   $("#view").innerHTML = `
-    <header><p class="today-date"><time datetime="${localToday()}">${esc(dateLabel)}</time></p><h1>Today</h1></header>
-    <section class="care-summary">
-      <span class="summary-icon" aria-hidden="true">${waterDue ? dropIcon : needNow ? leafIcon : checkIcon}</span>
-      <div><h2>${needNow ? `${needNow} care check${needNow === 1 ? "" : "s"} due` : "You're caught up for today"}</h2>
-      ${waterDue ? "<p>Check the soil first. If it's still moist, choose Skip.</p>" : ""}</div>
-    </section>
+    <header class="pagehead"><div><h1>Today</h1><p class="today-date"><time datetime="${localToday()}">${esc(dateLabel)}</time></p></div></header>
     <div class="today-layout">
-      <div class="care-list">
-        ${rooms.length > 1 ? `<div class="chips" role="group" aria-label="Filter by room">
-          ${["all", ...rooms].map((r) => `<button class="chip ${state.roomFilter === r ? "active" : ""}" aria-pressed="${state.roomFilter === r}" data-room="${esc(r)}">${esc(r === "all" ? "All rooms" : r)}</button>`).join("")}
-        </div>` : ""}
-        ${groups.map(([cls, title, list]) => list.length ? `<section class="care-group">
-          <div class="group-head"><h2 class="section-title ${cls}">${title} <span class="count">${list.length}</span></h2>
-            ${list.length > 1 ? `<button class="small ghost" data-selectgroup="${cls}">Select all</button>` : ""}</div>
-          <div class="due-list">${list.map(dueRow).join("")}</div>
-        </section>` : "").join("")}
-        ${items.length ? "" : `<div class="card empty">Nothing due in the next week${state.roomFilter !== "all" ? " in this room" : ""}.<br><a href="#/plants">See all plants</a></div>`}
-        <div class="batchbar" id="batchbar" hidden>
-          <b id="batch-count" role="status"></b>
-          <button class="primary" data-batch="done">Done</button>
-          <button data-batch="snooze">Snooze</button>
-          <button data-batch="skip">Skip</button>
-          <button class="ghost" data-batch="clear">Clear</button>
-          <span class="batch-confirm" hidden><span>Log <span id="batch-confirm-count"></span> selected?</span>
-            <button class="primary" data-batch-confirm>Yes, log</button>
-            <button data-batch-cancel>Cancel</button>
-          </span>
-        </div>
-      </div>
-      <section class="card weather" id="weather" aria-busy="true"><h2>Weather</h2><div class="muted">Loading weather...</div></section>
+      <div id="care-list"></div>
+      <section class="disclosure weather" id="weather" aria-busy="true"><div class="weather-loading muted">Loading weather...</div></section>
     </div>`;
-  updateBatchBar();
+  drawCare(due.items, rooms, dueByPlant);
   weather.then((result) => {
     if (revision !== viewRevision || !state.me) return;
-    const region = $("#weather");
-    if (region) region.outerHTML = weatherHtml(result);
+    $("#weather").outerHTML = weatherHtml(result);
+    $("#weather").ontoggle = (e) => { state.weatherOpen = e.currentTarget.open; };
   });
+}
 
-  $$("[data-room]").forEach((b) => (b.onclick = async () => {
-    if (b.dataset.room === state.roomFilter) return;
-    state.roomFilter = b.dataset.room;
+function drawCare(allItems, rooms, dueByPlant) {
+  const root = $("#care-list");
+  const items = allItems.filter((i) => !state.roomFilter || (i.room || "No room") === state.roomFilter);
+  const overdue = items.filter((i) => i.state === "overdue");
+  const today = items.filter((i) => i.state === "today");
+  const upcoming = items.filter((i) => i.state === "upcoming");
+  const visible = new Set(items.map((i) => i.task_id));
+  state.selected = new Set([...state.selected].filter((id) => visible.has(id)));
+  const list = (entries) => `
+    ${state.selecting && entries.length > 1 ? '<button type="button" class="small ghost select-all" data-selectgroup>Select all</button>' : ""}
+    <div class="due-list">${entries.map(dueRow).join("")}</div>`;
+  root.innerHTML = `
+    ${items.length || rooms.length > 1 ? `<div class="care-toolbar">
+      ${roomPicker("today-room", rooms, state.roomFilter)}
+      ${items.length ? `<button type="button" class="small ghost" id="select-care">${state.selecting ? "Cancel selection" : "Select"}</button>` : ""}
+    </div>` : ""}
+    ${[[overdue, "Overdue", "overdue"], [today, "Due today", "today"]].map(([entries, title, style]) => entries.length ? `
+      <section class="care-group"><h2 class="section-title ${style}">${title} <span class="section-count">${entries.length}</span></h2>${list(entries)}</section>` : "").join("")}
+    ${overdue.length || today.length ? "" : `<p class="care-empty muted">${state.roomFilter ? "Nothing due today in this room." : "You're caught up for today."}</p>`}
+    ${upcoming.length ? `<details class="disclosure upcoming" id="upcoming" ${state.upcomingOpen ? "open" : ""}>
+      <summary><span>Next 7 days</span><span class="disclosure-meta muted">${upcoming.length}</span>${chevronIcon}</summary>${list(upcoming)}
+    </details>` : ""}
+    <div class="batchbar" id="batchbar" hidden>
+      <b id="batch-count" role="status"></b>
+      <button class="primary" data-batch="done">Done</button>
+      <button data-batch="snooze">Snooze</button>
+      <button data-batch="skip">Skip</button>
+      <button class="ghost" id="clear-care">Clear</button>
+      <span class="batch-confirm" hidden><span>Log <span id="batch-confirm-count"></span> selected?</span>
+        <button class="primary" data-batch-confirm>Yes, log</button>
+        <button data-batch-cancel>Cancel</button>
+      </span>
+    </div>`;
+
+  const redraw = (focus) => {
     state.selected.clear();
-    try {
-      await renderToday();
-      $("[data-room].active")?.focus({ preventScroll: true });
-    } catch (err) { fail(err); }
-  }));
-  $$("[data-select]").forEach((cb) => (cb.onchange = () => {
+    drawCare(allItems, rooms, dueByPlant);
+    $(focus)?.focus({ preventScroll: true });
+  };
+  if ($("#today-room")) $("#today-room").onchange = (e) => {
+    state.roomFilter = e.currentTarget.value;
+    redraw("#today-room");
+  };
+  if ($("#select-care")) $("#select-care").onclick = () => {
+    state.selecting = !state.selecting;
+    redraw("#select-care");
+  };
+  if ($("#upcoming")) $("#upcoming").ontoggle = (e) => {
+    state.upcomingOpen = e.currentTarget.open;
+    if (!state.upcomingOpen && state.selecting) {
+      $$("[data-select]:checked", e.currentTarget).forEach((cb) => {
+        cb.checked = false;
+        state.selected.delete(Number(cb.dataset.select));
+        cb.closest(".due").classList.remove("sel");
+      });
+      updateBatchBar();
+    }
+  };
+  $$(".due [data-select]", root).forEach((cb) => (cb.onchange = () => {
     const id = Number(cb.dataset.select);
     cb.checked ? state.selected.add(id) : state.selected.delete(id);
     cb.closest(".due").classList.toggle("sel", cb.checked);
     updateBatchBar();
   }));
-  $$("[data-selectgroup]").forEach((b) => (b.onclick = () => {
-    $$("[data-select]", b.closest(".care-group")).forEach((cb) => {
+  $$("[data-selectgroup]", root).forEach((b) => (b.onclick = () => {
+    $$("[data-select]", b.nextElementSibling).forEach((cb) => {
       cb.checked = true;
       state.selected.add(Number(cb.dataset.select));
       cb.closest(".due").classList.add("sel");
     });
     updateBatchBar();
   }));
-  bindCareButtons($("#view"), renderToday);
-  $$("[data-batch]").forEach((b) => (b.onclick = () => batchAction(b.dataset.batch)));
-  $$("[data-confirm-done]").forEach((b) => (b.onclick = () => {
+  $$("[data-care-more]", root).forEach((button) => (button.onclick = () => {
+    const item = items.find((i) => i.task_id === Number(button.dataset.careMore));
+    careOptions({ ...item, plant_due: dueByPlant.get(item.plant_id) || 0 });
+  }));
+  bindCareButtons(root, renderToday);
+  $("#clear-care").onclick = () => redraw("#select-care");
+  $$("[data-batch]", root).forEach((b) => (b.onclick = () => batchAction(b.dataset.batch)));
+  $$("[data-confirm-done]", root).forEach((b) => (b.onclick = () => {
     b.disabled = true;
     care(Number(b.dataset.confirmDone), "done", {}, renderToday);
   }));
-  $$("[data-cancel-done]").forEach((b) => (b.onclick = () => {
+  $$("[data-cancel-done]", root).forEach((b) => (b.onclick = () => {
     const row = b.closest(".due");
     $(".due-confirm", row).hidden = true;
     $(".due-done", row).focus();
   }));
-  $("[data-batch-confirm]").onclick = (e) => {
+  $("[data-batch-confirm]", root).onclick = (e) => {
     e.currentTarget.disabled = true;
     batchAction("done", true);
   };
-  $("[data-batch-cancel]").onclick = () => {
+  $("[data-batch-cancel]", root).onclick = () => {
     $(".batch-confirm").hidden = true;
     $("[data-batch=done]").focus();
   };
+  updateBatchBar();
 }
 
 function updateBatchBar() {
@@ -397,7 +458,6 @@ function updateBatchBar() {
 }
 
 async function batchAction(action, confirmed = false) {
-  if (action === "clear") { state.selected.clear(); return renderToday(); }
   if (action === "done" && !confirmed) {
     $("#batch-confirm-count").textContent = state.selected.size;
     $(".batch-confirm").hidden = false;
@@ -410,6 +470,7 @@ async function batchAction(action, confirmed = false) {
     try {
       await api("/api/care/batch", { method: "POST", body: { task_ids: ids, action, ...extra } });
       state.selected.clear();
+      state.selecting = false;
       toast(`${ids.length} marked ${action === "done" ? "done" : action === "skip" ? "skipped" : "snoozed"}`);
       if (location.hash === hash) await renderToday();
     } catch (err) {
@@ -520,39 +581,33 @@ async function renderPlants() {
   const plants = await api("/api/plants");
   if (revision !== viewRevision) return;
   const rooms = [...new Set(plants.map((p) => p.room || "No room"))].sort();
-  if (state.plantRoom !== "all" && !rooms.includes(state.plantRoom)) state.plantRoom = "all";
+  if (!rooms.includes(state.plantRoom)) state.plantRoom = "";
   $("#view").innerHTML = `
-    <div class="pagehead"><div><h1>Plants</h1><div class="muted" id="plant-count" role="status"></div></div>
-      <button class="primary" id="add-plant">${addIcon}Add plant</button></div>
-    <div class="toolbar"><div class="search-field">${searchIcon}<input type="search" id="plant-search" placeholder="Search plants" value="${esc(state.search)}" aria-label="Search plants"></div></div>
-    ${rooms.length > 1 ? `<div class="chips" role="group" aria-label="Filter by room">
-      ${["all", ...rooms].map((r) => `<button class="chip" data-proom="${esc(r)}">${esc(r === "all" ? "All rooms" : r)}</button>`).join("")}</div>` : ""}
+    <header class="pagehead"><h1>Plants</h1>
+      <button class="compact-add" id="add-plant" aria-label="Add plant">${addIcon}<span>Add plant</span></button></header>
+    <div class="toolbar"><div class="search-field">${searchIcon}<input type="search" id="plant-search" placeholder="Search" value="${esc(state.search)}" aria-label="Search plants"></div>
+      ${roomPicker("plant-room", rooms, state.plantRoom)}</div>
+    <p class="sr-only" id="plant-count" role="status"></p>
     <div class="grid" id="plant-grid"></div>`;
   const draw = () => {
     const q = state.search.trim().toLowerCase();
     const list = plants.filter((p) =>
-      (state.plantRoom === "all" || (p.room || "No room") === state.plantRoom) &&
+      (!state.plantRoom || (p.room || "No room") === state.plantRoom) &&
       (!q || [p.name, p.species, p.room].join(" ").toLowerCase().includes(q)));
     const total = `${plants.length} plant${plants.length === 1 ? "" : "s"}`;
     $("#plant-count").textContent = list.length === plants.length ? total : `${list.length} of ${total}`;
     $("#plant-grid").innerHTML = list.length ? list.map((p) => {
       const n = p.next;
-      const details = [p.species, p.room].filter(Boolean).join(" · ");
       return `<a class="plant-card" href="#/plant/${p.id}">${thumb(p.photo)}
         <div class="pc-body"><div class="pc-name">${esc(p.name)}</div>
-        ${details ? `<div class="pc-meta muted">${esc(details)}</div>` : ""}
-        ${n ? `<div class="due-when ${n.state}">${esc(n.label)} · ${whenText(n.days)}</div>` : '<div class="due-when muted">No care tasks</div>'}
+        ${p.room || n?.days <= 0 ? `<div class="pc-meta muted">${esc(p.room)}
+          ${p.room && n?.days <= 0 ? " · " : ""}${n?.days <= 0 ? `<span class="due-date ${n.state}">${n.days < 0 ? "Overdue" : "Due today"}</span>` : ""}</div>` : ""}
         </div></a>`;
     }).join("") : `<div class="card empty">${plants.length ? "No plants match." : "No plants yet. Add your first one."}</div>`;
-    $$("[data-proom]").forEach((b) => {
-      const active = b.dataset.proom === state.plantRoom;
-      b.classList.toggle("active", active);
-      b.setAttribute("aria-pressed", String(active));
-    });
   };
   draw();
   $("#plant-search").oninput = (e) => { state.search = e.target.value; draw(); };
-  $$("[data-proom]").forEach((b) => (b.onclick = () => { state.plantRoom = b.dataset.proom; draw(); }));
+  if ($("#plant-room")) $("#plant-room").onchange = (e) => { state.plantRoom = e.currentTarget.value; draw(); };
   $("#add-plant").onclick = () => plantForm(null);
 }
 
@@ -944,7 +999,8 @@ function photoModal(p, after) {
 
 // ---------------------------------------------------------------- settings
 
-async function renderSettings() {
+async function renderSettings(section) {
+  const openSection = section === undefined ? $("#settings-list details[open]")?.id : `settings-${section}`;
   const revision = ++viewRevision;
   if (state.me && state.me.token_session) {
     $("#view").innerHTML = `<section class="card stack"><h1 style="margin-top:0">Settings</h1>
@@ -962,94 +1018,120 @@ async function renderSettings() {
   const hours = (sel) => Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === sel ? "selected" : ""}>${String(h).padStart(2, "0")}:00</option>`).join("");
   $("#view").innerHTML = `
     <h1>Settings</h1>
+    <div id="settings-list">
     ${admin ? `
-    <section class="card settings-section stack">
-      <h2 style="margin:0">General</h2>
-      <div><label for="s-name">App name</label><div class="row"><input id="s-name" maxlength="60" value="${esc(settings.app_name)}" style="flex:1"><button id="s-name-save">Save</button></div></div>
-      <div><label for="s-units">Units</label><select id="s-units"><option value="imperial" ${settings.units !== "metric" ? "selected" : ""}>°F, inches, mph</option><option value="metric" ${settings.units === "metric" ? "selected" : ""}>°C, mm, km/h</option></select></div>
-    </section>
-    <section class="card settings-section stack" id="features">
-      <h2 style="margin:0">Features</h2>
-      <p class="muted" style="margin:0">Turn the extras on or off for everyone. Turning one off hides it; nothing is deleted.</p>
-      <label class="toggle"><input type="checkbox" data-feature="growth_timeline" ${settings.feature_growth_timeline ? "checked" : ""}> Growth timeline <span class="muted">· each plant's photos side by side, oldest first</span></label>
-      <label class="toggle"><input type="checkbox" data-feature="care_suggestions" ${settings.feature_care_suggestions ? "checked" : ""}> Care suggestions <span class="muted">· photo ID pre-fills water and fertilize intervals</span></label>
-      <label class="toggle"><input type="checkbox" data-feature="quick_links" ${settings.feature_quick_links ? "checked" : ""}> One-tap quick links <span class="muted">· log care from a notification without signing in</span></label>
-      <label class="toggle"><input type="checkbox" data-feature="plant_info" ${settings.feature_plant_info ? "checked" : ""}> Plant Info <span class="muted">· free-text details on each plant; hiding it keeps the text</span></label>
-      <label class="toggle"><input type="checkbox" data-feature="token_login" ${settings.feature_token_login ? "checked" : ""}> API token sign-in <span class="muted">· sign into the website with an existing API token</span></label>
-      <p class="hint" style="margin:0">A quick link can only log or snooze its own task. Set "App address for links" under Notifications so the links in alerts work away from home. If a link ever ends up somewhere it shouldn't, reset them all.</p>
-      <div><button class="small" id="ql-reset">Reset all quick links</button></div>
-    </section>
-    <section class="card settings-section stack">
-      <h2 style="margin:0">Weather location</h2>
-      <p class="muted" style="margin:0">Current: ${settings.weather_name ? esc(settings.weather_name) : "not set"}. Weather comes from Open-Meteo (free, no API key) and is refreshed every 30 minutes.</p>
-      <div class="row"><input id="wx-q" placeholder="City or town" style="flex:1" aria-label="Search for a city"><button id="wx-search">Search</button></div>
-      <div class="results" id="wx-results"></div>
-      ${settings.weather_name ? '<button class="small ghost" id="wx-clear">Remove location</button>' : ""}
-    </section>
-    <section class="card settings-section stack">
-      <h2 style="margin:0">Seasons</h2>
-      <p class="muted" style="margin:0">Plants drink less in winter. Pick your winter months and how much to stretch check intervals then. A task's own winter interval wins over this.</p>
-      <div class="row" id="s-months">${MONTHS.map((m, i) => `<label class="toggle" style="min-width:74px"><input type="checkbox" value="${i + 1}" ${settings.winter_months.includes(i + 1) ? "checked" : ""}> ${m}</label>`).join("")}</div>
-      <div><label for="s-mult">Winter stretch</label><select id="s-mult">
-        ${[1, 1.25, 1.5, 2].map((v) => `<option value="${v}" ${settings.winter_multiplier === v ? "selected" : ""}>${v === 1 ? "Off (same intervals)" : "x" + v}</option>`).join("")}</select></div>
-      <button id="s-season-save">Save seasons</button>
-    </section>
-    <section class="card settings-section stack">
-      <h2 style="margin:0">Notifications</h2>
-      <p class="muted" style="margin:0">Uses <a href="https://github.com/caronc/apprise/wiki" target="_blank" rel="noopener">Apprise</a> URLs, one per line: ntfy, Gotify, Pushover, email, Discord, Telegram and more. Alerts say "check soil", never "water now".</p>
-      <div><label for="n-urls">Apprise URLs</label><textarea id="n-urls" placeholder="ntfys://ntfy.example.com/plants&#10;pover://user@token">${esc(notify.notify_urls)}</textarea></div>
-      <div class="form-grid">
-        <div><label for="n-mode">Style</label><select id="n-mode"><option value="digest" ${notify.notify_mode === "digest" ? "selected" : ""}>One daily digest</option><option value="each" ${notify.notify_mode === "each" ? "selected" : ""}>One alert per plant</option></select></div>
-        <div><label for="n-hour">Send from</label><select id="n-hour">${hours(notify.notify_hour)}</select></div>
-        <div><label for="n-qs">Quiet hours start</label><select id="n-qs">${hours(notify.quiet_start)}</select></div>
-        <div><label for="n-qe">Quiet hours end</label><select id="n-qe">${hours(notify.quiet_end)}</select></div>
-        <div><label for="n-rep">Repeat overdue every (days, 0 = never)</label><input id="n-rep" type="number" min="0" max="30" inputmode="numeric" value="${notify.overdue_repeat_days}"></div>
-        <div><label for="n-url">App address for links (optional)</label><input id="n-url" type="url" placeholder="https://plants.example.com" value="${esc(notify.public_url)}"></div>
+    <details class="settings-item disclosure" name="plants-settings" id="settings-general">
+      <summary><span>General</span>${chevronIcon}</summary>
+      <div class="disclosure-body stack">
+        <div><label for="s-name">App name</label><div class="row"><input id="s-name" maxlength="60" value="${esc(settings.app_name)}" style="flex:1"><button id="s-name-save">Save</button></div></div>
+        <div><label for="s-units">Units</label><select id="s-units"><option value="imperial" ${settings.units !== "metric" ? "selected" : ""}>°F, inches, mph</option><option value="metric" ${settings.units === "metric" ? "selected" : ""}>°C, mm, km/h</option></select></div>
       </div>
-      <div class="row"><button id="n-save">Save notifications</button><button id="n-test">Send test</button></div>
-    </section>` : ""}
-    <section class="card settings-section stack" id="push-section">
-      <h2 style="margin:0">Push notifications</h2>
-      <p class="muted" style="margin:0">Get care reminders on this device, even when Plants is closed. They follow ${admin ? "the notification schedule above" : "the household's notification schedule"}: send-from hour, quiet hours, and overdue repeats.</p>
-      <label class="toggle"><input type="checkbox" id="push-on" disabled> Push on this device</label>
-      <p class="muted" id="push-status" style="margin:0">Checking this browser…</p>
-      <div class="row" id="push-actions" hidden><button id="push-test">Send test push</button></div>
-    </section>
-    <section class="card settings-section">
-      <h2 style="margin-top:0">Rooms</h2>
-      <div id="rooms">${rooms.map((r) => `<div class="list-row"><span class="grow">${esc(r.name)} <span class="muted">· ${r.plants} plant${r.plants === 1 ? "" : "s"}</span></span>
-        <button class="small" data-rename="${r.id}">Rename</button><button class="small danger" data-delroom="${r.id}">Delete</button></div>`).join("") || '<p class="muted">No rooms yet. Rooms are created when you type one on a plant.</p>'}</div>
-      <div class="row" style="margin-top:10px"><input id="room-new" placeholder="New room" maxlength="60" style="flex:1" aria-label="New room name"><button id="room-add">Add room</button></div>
-    </section>
-    <section class="card settings-section">
-      <h2 style="margin-top:0">API tokens</h2>
-      <p class="muted">Let a script, home automation, or an AI assistant add plants from a tag photo, read what's due, and log care. <a href="/api/docs" target="_blank" rel="noopener">API docs</a></p>
-      <div id="token-new"></div>
-      <div>${tokens.map((t) => `<div class="list-row"><span class="grow"><b>${esc(t.name)}</b> <span class="muted">${esc(t.prefix)}… · ${t.last_used_at ? "used " + fmtDate(t.last_used_at) : "never used"}</span></span>
-        <button class="small danger" data-revoke="${t.id}">Revoke</button></div>`).join("")}</div>
-      <div class="row" style="margin-top:10px"><input id="tok-name" placeholder="Token name, e.g. Assistant" maxlength="60" style="flex:1" aria-label="Token name"><button id="tok-add">Create token</button></div>
-    </section>
+    </details>
+    <details class="settings-item disclosure" name="plants-settings" id="settings-features">
+      <summary><span>Features</span>${chevronIcon}</summary>
+      <div class="disclosure-body stack">
+        <p class="muted" >These switches apply to everyone in your household.</p>
+        <label class="toggle"><input type="checkbox" data-feature="growth_timeline" ${settings.feature_growth_timeline ? "checked" : ""}><span>Growth timeline<small class="muted">each plant's photos side by side, oldest first</small></span></label>
+        <label class="toggle"><input type="checkbox" data-feature="care_suggestions" ${settings.feature_care_suggestions ? "checked" : ""}><span>Care suggestions<small class="muted">photo ID pre-fills water and fertilize intervals</small></span></label>
+        <label class="toggle"><input type="checkbox" data-feature="quick_links" ${settings.feature_quick_links ? "checked" : ""}><span>One-tap quick links<small class="muted">log care from a notification without signing in</small></span></label>
+        <label class="toggle"><input type="checkbox" data-feature="plant_info" ${settings.feature_plant_info ? "checked" : ""}><span>Plant Info<small class="muted">free-text details on each plant; hiding it keeps the text</small></span></label>
+        <label class="toggle"><input type="checkbox" data-feature="token_login" ${settings.feature_token_login ? "checked" : ""}><span>API token sign-in<small class="muted">sign into the website with an existing API token</small></span></label>
+        <p class="hint">A quick link can only log or snooze its own task. Set "App address for links" under Notifications so the links in alerts work away from home. If a link ever ends up somewhere it shouldn't, reset them all.</p>
+        <div><button class="small" id="ql-reset">Reset all quick links</button></div>
+      </div>
+    </details>
+    <details class="settings-item disclosure" name="plants-settings" id="settings-weather">
+      <summary><span>Weather location</span>${chevronIcon}</summary>
+      <div class="disclosure-body stack">
+        <p class="muted" >${settings.weather_name ? esc(settings.weather_name) : "No location set"}.</p>
+        <div class="row"><input id="wx-q" placeholder="City or town" style="flex:1" aria-label="Search for a city"><button id="wx-search">Search</button></div>
+        <div class="results" id="wx-results"></div>
+        ${settings.weather_name ? '<button class="small ghost" id="wx-clear">Remove location</button>' : ""}
+      </div>
+    </details>
+    <details class="settings-item disclosure" name="plants-settings" id="settings-seasons">
+      <summary><span>Seasons</span>${chevronIcon}</summary>
+      <div class="disclosure-body stack">
+        <p class="muted" >Choose the winter months and how much to extend care intervals. Individual winter intervals take priority.</p>
+        <div class="row" id="s-months">${MONTHS.map((m, i) => `<label class="toggle" style="min-width:74px"><input type="checkbox" value="${i + 1}" ${settings.winter_months.includes(i + 1) ? "checked" : ""}> ${m}</label>`).join("")}</div>
+        <div><label for="s-mult">Winter stretch</label><select id="s-mult">
+          ${[1, 1.25, 1.5, 2].map((v) => `<option value="${v}" ${settings.winter_multiplier === v ? "selected" : ""}>${v === 1 ? "Off (same intervals)" : "x" + v}</option>`).join("")}</select></div>
+        <button id="s-season-save">Save seasons</button>
+      </div>
+    </details>
+    <details class="settings-item disclosure" name="plants-settings" id="settings-notifications">
+      <summary><span>Notifications</span>${chevronIcon}</summary>
+      <div class="disclosure-body stack">
+        <p class="muted">Uses <a href="https://github.com/caronc/apprise/wiki" target="_blank" rel="noopener">Apprise</a> URLs, one per line: ntfy, Gotify, Pushover, email, Discord, Telegram and more. Alerts say "check soil", never "water now".</p>
+        <div><label for="n-urls">Apprise URLs</label><textarea id="n-urls" placeholder="ntfys://ntfy.example.com/plants&#10;pover://user@token">${esc(notify.notify_urls)}</textarea></div>
+        <div class="form-grid">
+          <div><label for="n-mode">Style</label><select id="n-mode"><option value="digest" ${notify.notify_mode === "digest" ? "selected" : ""}>One daily digest</option><option value="each" ${notify.notify_mode === "each" ? "selected" : ""}>One alert per plant</option></select></div>
+          <div><label for="n-hour">Send from</label><select id="n-hour">${hours(notify.notify_hour)}</select></div>
+          <div><label for="n-qs">Quiet hours start</label><select id="n-qs">${hours(notify.quiet_start)}</select></div>
+          <div><label for="n-qe">Quiet hours end</label><select id="n-qe">${hours(notify.quiet_end)}</select></div>
+          <div><label for="n-rep">Repeat overdue every (days, 0 = never)</label><input id="n-rep" type="number" min="0" max="30" inputmode="numeric" value="${notify.overdue_repeat_days}"></div>
+          <div><label for="n-url">App address for links (optional)</label><input id="n-url" type="url" placeholder="https://plants.example.com" value="${esc(notify.public_url)}"></div>
+        </div>
+        <div class="row"><button id="n-save">Save notifications</button><button id="n-test">Send test</button></div>
+      </div>
+    </details>` : ""}
+    <details class="settings-item disclosure" name="plants-settings" id="settings-push">
+      <summary><span>Push notifications</span>${chevronIcon}</summary>
+      <div class="disclosure-body stack">
+        <p class="muted">Get care reminders on this device, even when Plants is closed. Reminders follow the household’s notification schedule.</p>
+        <label class="toggle"><input type="checkbox" id="push-on" disabled> Push on this device</label>
+        <p class="muted" id="push-status">Checking this browser…</p>
+        <div class="row" id="push-actions" hidden><button id="push-test">Send test push</button></div>
+      </div>
+    </details>
+    <details class="settings-item disclosure" name="plants-settings" id="settings-rooms">
+      <summary><span>Rooms</span>${chevronIcon}</summary>
+      <div class="disclosure-body stack">
+        <div id="rooms">${rooms.map((r) => `<div class="list-row"><span class="grow">${esc(r.name)} <span class="muted">· ${r.plants} plant${r.plants === 1 ? "" : "s"}</span></span>
+          <button class="small" data-rename="${r.id}">Rename</button><button class="small danger" data-delroom="${r.id}">Delete</button></div>`).join("") || '<p class="muted">No rooms yet. Rooms are created when you type one on a plant.</p>'}</div>
+        <div class="row"><input id="room-new" placeholder="New room" maxlength="60" style="flex:1" aria-label="New room name"><button id="room-add">Add room</button></div>
+      </div>
+    </details>
+    <details class="settings-item disclosure" name="plants-settings" id="settings-tokens">
+      <summary><span>API tokens</span>${chevronIcon}</summary>
+      <div class="disclosure-body stack">
+        <p class="muted">Let a script, home automation, or an AI assistant add plants from a tag photo, read what's due, and log care. <a href="/api/docs" target="_blank" rel="noopener">API docs</a></p>
+        <div id="token-new"></div>
+        <div>${tokens.map((t) => `<div class="list-row"><span class="grow"><b>${esc(t.name)}</b> <span class="muted">${esc(t.prefix)}… · ${t.last_used_at ? "used " + fmtDate(t.last_used_at) : "never used"}</span></span>
+          <button class="small danger" data-revoke="${t.id}">Revoke</button></div>`).join("")}</div>
+        <div class="row"><input id="tok-name" placeholder="Token name, e.g. Assistant" maxlength="60" style="flex:1" aria-label="Token name"><button id="tok-add">Create token</button></div>
+      </div>
+    </details>
     ${admin ? `
-    <section class="card settings-section">
-      <h2 style="margin-top:0">Users</h2>
-      <p class="muted">Everyone shares one set of plants. Each care entry records who logged it.</p>
-      ${users.map((u) => `<div class="list-row"><span class="grow"><b>${esc(u.username)}</b> <span class="muted">${u.is_admin ? "Administrator" : "Member"}${u.active ? "" : " · disabled"}</span></span>
-        ${u.id === state.me.id ? '<span class="muted">You</span>' : `<button class="small" data-uadmin="${u.id}" data-val="${u.is_admin ? 0 : 1}">${u.is_admin ? "Make member" : "Make admin"}</button>
-        <button class="small" data-uactive="${u.id}" data-val="${u.active ? 0 : 1}">${u.active ? "Disable" : "Enable"}</button>`}
-        <button class="small" data-upw="${u.id}">Password</button></div>`).join("")}
-      <form class="form-grid" id="user-form" style="margin-top:10px">
-        <div><label for="u-name">Username</label><input id="u-name" required autocomplete="off"></div>
-        <div><label for="u-pw">Password</label><input id="u-pw" type="password" required minlength="8" autocomplete="new-password"></div>
-        <label class="toggle"><input type="checkbox" id="u-admin"> Administrator</label>
-        <div><button class="primary" type="submit">Add user</button></div>
-      </form>
-    </section>
-    <section class="card settings-section stack">
-      <h2 style="margin:0">Backup</h2>
-      <p class="muted" style="margin:0">Export everything, photos included, as one JSON file. Importing replaces all data and signs everyone out.</p>
-      <div class="row"><a class="btn" href="/api/export" download="plants-backup.json">Export backup</a>
-        <label class="btn" style="margin:0;color:var(--text);font-size:15px">Import backup<input type="file" id="import" accept="application/json,.json" hidden></label></div>
-    </section>` : ""}`;
+    <details class="settings-item disclosure" name="plants-settings" id="settings-users">
+      <summary><span>Users</span>${chevronIcon}</summary>
+      <div class="disclosure-body stack">
+        <p class="muted">Everyone shares one set of plants. Each care entry records who logged it.</p>
+        ${users.map((u) => `<div class="list-row"><span class="grow"><b>${esc(u.username)}</b> <span class="muted">${u.is_admin ? "Administrator" : "Member"}${u.active ? "" : " · disabled"}</span></span>
+          ${u.id === state.me.id ? '<span class="muted">You</span>' : `<button class="small" data-uadmin="${u.id}" data-val="${u.is_admin ? 0 : 1}">${u.is_admin ? "Make member" : "Make admin"}</button>
+          <button class="small" data-uactive="${u.id}" data-val="${u.active ? 0 : 1}">${u.active ? "Disable" : "Enable"}</button>`}
+          <button class="small" data-upw="${u.id}">Password</button></div>`).join("")}
+        <form class="form-grid" id="user-form">
+          <div><label for="u-name">Username</label><input id="u-name" required autocomplete="off"></div>
+          <div><label for="u-pw">Password</label><input id="u-pw" type="password" required minlength="8" autocomplete="new-password"></div>
+          <label class="toggle"><input type="checkbox" id="u-admin"> Administrator</label>
+          <div><button class="primary" type="submit">Add user</button></div>
+        </form>
+      </div>
+    </details>
+    <details class="settings-item disclosure" name="plants-settings" id="settings-backup">
+      <summary><span>Backup</span>${chevronIcon}</summary>
+      <div class="disclosure-body stack">
+        <p class="muted">Export everything, photos included, as one JSON file. Importing replaces all data and signs everyone out.</p>
+        <div class="row"><a class="btn" href="/api/export" download="plants-backup.json">Export backup</a>
+          <label class="btn" style="margin:0;color:var(--text);font-size:15px">Import backup<input type="file" id="import" accept="application/json,.json" hidden></label></div>
+      </div>
+    </details>` : ""}
+    </div>
+    <div class="mobile-account"><span class="muted">${esc(state.me.username)}</span><button type="button" class="ghost" id="settings-logout">Sign out</button></div>`;
+  const opened = document.getElementById(openSection);
+  if (opened?.closest("#settings-list")) opened.open = true;
+  $("#settings-logout").onclick = () => signOut().catch(fail);
   bindSettings(admin);
   initPushSettings(admin);
 }
