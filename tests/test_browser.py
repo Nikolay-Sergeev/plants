@@ -442,6 +442,25 @@ def test_disclosure_defaults_follow_viewport(app_url):
         browser.close()
 
 
+def test_settings_recovers_from_a_failed_notifications_request(app_url):
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1280, "height": 900})
+        sign_in(page, app_url)
+        page.route("**/api/notifications", lambda route: route.abort("blockedbyclient"))
+        page.get_by_role("link", name="Settings", exact=True).click()
+        name = page.get_by_role("textbox", name="App name")
+        expect(name).to_be_visible()
+        expect(page.get_by_text("Notification settings could not be loaded.")).to_be_visible()
+        name.fill("Unsaved app name")
+
+        page.unroute("**/api/notifications")
+        page.get_by_role("button", name="Try again", exact=True).click()
+        expect(page.get_by_label("Apprise URLs")).to_be_visible()
+        expect(name).to_have_value("Unsaved app name")
+        browser.close()
+
+
 def test_weather_forecast_displays_conditions_and_missing_values(app_url):
     forecast = {
         "configured": True, "location": "Test City, Test Region",

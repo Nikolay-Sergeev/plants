@@ -34,7 +34,7 @@ class ApiError extends Error {
 }
 
 async function api(path, opts = {}) {
-  const init = { method: opts.method || "GET", headers: {}, credentials: "same-origin" };
+  const init = { method: opts.method || "GET", headers: {}, credentials: "same-origin", signal: opts.signal };
   if (opts.form) init.body = opts.form;
   else if (opts.body !== undefined) {
     init.headers["Content-Type"] = "application/json";
@@ -1096,15 +1096,14 @@ async function renderSettings(section) {
     return;
   }
   const admin = state.me.is_admin;
-  const [settings, rooms, tokens, notify, users] = await Promise.all([
+  const [settings, rooms, tokens, users] = await Promise.all([
     api("/api/settings"), api("/api/rooms"), api("/api/tokens"),
-    admin ? api("/api/notifications") : null, admin ? api("/api/users") : null,
+    admin ? api("/api/users") : null,
   ]);
   if (revision !== viewRevision) return;
   const openSections = section === undefined && $("#settings-list")
     ? new Set($$("#settings-list > details[open]").map((details) => details.id)) : null;
   state.settings = settings;
-  const hours = (sel) => Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === sel ? "selected" : ""}>${String(h).padStart(2, "0")}:00</option>`).join("");
   $("#view").innerHTML = `
     <h1>Settings</h1>
     <div id="settings-list">
@@ -1150,18 +1149,8 @@ async function renderSettings(section) {
     </details>
     <details class="settings-item disclosure" id="settings-notifications">
       <summary><span>Notifications</span>${chevronIcon}</summary>
-      <div class="disclosure-body stack">
-        <p class="muted">Uses <a href="https://github.com/caronc/apprise/wiki" target="_blank" rel="noopener">Apprise</a> URLs, one per line: ntfy, Gotify, Pushover, email, Discord, Telegram and more. Alerts say "check soil", never "water now".</p>
-        <div><label for="n-urls">Apprise URLs</label><textarea id="n-urls" placeholder="ntfys://ntfy.example.com/plants&#10;pover://user@token">${esc(notify.notify_urls)}</textarea></div>
-        <div class="form-grid">
-          <div><label for="n-mode">Style</label><select id="n-mode"><option value="digest" ${notify.notify_mode === "digest" ? "selected" : ""}>One daily digest</option><option value="each" ${notify.notify_mode === "each" ? "selected" : ""}>One alert per plant</option></select></div>
-          <div><label for="n-hour">Send from</label><select id="n-hour">${hours(notify.notify_hour)}</select></div>
-          <div><label for="n-qs">Quiet hours start</label><select id="n-qs">${hours(notify.quiet_start)}</select></div>
-          <div><label for="n-qe">Quiet hours end</label><select id="n-qe">${hours(notify.quiet_end)}</select></div>
-          <div><label for="n-rep">Repeat overdue every (days, 0 = never)</label><input id="n-rep" type="number" min="0" max="30" inputmode="numeric" value="${notify.overdue_repeat_days}"></div>
-          <div><label for="n-url">App address for links (optional)</label><input id="n-url" type="url" placeholder="https://plants.example.com" value="${esc(notify.public_url)}"></div>
-        </div>
-        <div class="row"><button id="n-save">Save notifications</button><button id="n-test">Send test</button></div>
+      <div class="disclosure-body stack" id="notification-settings" aria-busy="true">
+        <p class="muted" role="status">Loading notification settings…</p>
       </div>
     </details>` : ""}
     <details class="settings-item disclosure" id="settings-push">
@@ -1221,7 +1210,67 @@ async function renderSettings(section) {
   setSettingsDisclosures(openSections, section);
   $("#settings-logout").onclick = () => signOut().catch(fail);
   bindSettings(admin);
+  if (admin) loadNotificationSettings($("#notification-settings"));
   initPushSettings(admin);
+}
+
+// Notification settings can fail independently of the rest of Settings.
+async function loadNotificationSettings(panel) {
+  const focused = panel.contains(document.activeElement);
+  const retry = $("#retry-notifications", panel);
+  if (retry) {
+    retry.disabled = true;
+    retry.textContent = "Retrying…";
+  }
+  panel.setAttribute("aria-busy", "true");
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  const notify = await api("/api/notifications", { signal: controller.signal })
+    .catch(() => null)
+    .finally(() => clearTimeout(timeout));
+  if (!panel.isConnected) return;
+  panel.removeAttribute("aria-busy");
+  const restoreFocus = focused && [retry, document.body].includes(document.activeElement);
+
+  if (!notify) {
+    panel.innerHTML = `<p class="muted" role="status">Notification settings could not be loaded.</p>
+      <button type="button" id="retry-notifications">Try again</button>`;
+    const button = $("#retry-notifications", panel);
+    button.onclick = () => loadNotificationSettings(panel);
+    if (restoreFocus) button.focus({ preventScroll: true });
+    return;
+  }
+
+  renderNotificationSettings(panel, notify);
+  if (restoreFocus) $("#n-urls", panel).focus({ preventScroll: true });
+}
+
+function renderNotificationSettings(panel, notify) {
+  const hours = (sel) => Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === sel ? "selected" : ""}>${String(h).padStart(2, "0")}:00</option>`).join("");
+  panel.innerHTML = `
+    <p class="muted">Uses <a href="https://github.com/caronc/apprise/wiki" target="_blank" rel="noopener">Apprise</a> URLs, one per line: ntfy, Gotify, Pushover, email, Discord, Telegram and more. Alerts say "check soil", never "water now".</p>
+    <div><label for="n-urls">Apprise URLs</label><textarea id="n-urls" placeholder="ntfys://ntfy.example.com/plants&#10;pover://user@token">${esc(notify.notify_urls)}</textarea></div>
+    <div class="form-grid">
+      <div><label for="n-mode">Style</label><select id="n-mode"><option value="digest" ${notify.notify_mode === "digest" ? "selected" : ""}>One daily digest</option><option value="each" ${notify.notify_mode === "each" ? "selected" : ""}>One alert per plant</option></select></div>
+      <div><label for="n-hour">Send from</label><select id="n-hour">${hours(notify.notify_hour)}</select></div>
+      <div><label for="n-qs">Quiet hours start</label><select id="n-qs">${hours(notify.quiet_start)}</select></div>
+      <div><label for="n-qe">Quiet hours end</label><select id="n-qe">${hours(notify.quiet_end)}</select></div>
+      <div><label for="n-rep">Repeat overdue every (days, 0 = never)</label><input id="n-rep" type="number" min="0" max="30" inputmode="numeric" value="${notify.overdue_repeat_days}"></div>
+      <div><label for="n-url">App address for links (optional)</label><input id="n-url" type="url" placeholder="https://plants.example.com" value="${esc(notify.public_url)}"></div>
+    </div>
+    <div class="row"><button id="n-save">Save notifications</button><button id="n-test">Send test</button></div>`;
+  const notifyBody = () => ({
+    notify_urls: $("#n-urls").value, notify_mode: $("#n-mode").value, notify_hour: Number($("#n-hour").value),
+    quiet_start: Number($("#n-qs").value), quiet_end: Number($("#n-qe").value),
+    overdue_repeat_days: Number($("#n-rep").value || 0), public_url: $("#n-url").value,
+  });
+  $("#n-save").onclick = async () => {
+    try { await api("/api/notifications", { method: "PUT", body: notifyBody() }); toast("Notifications saved"); } catch (err) { fail(err); }
+  };
+  $("#n-test").onclick = async () => {
+    try { await api("/api/notifications", { method: "PUT", body: notifyBody() }); await api("/api/notifications/test", { method: "POST" }); toast("Test sent"); } catch (err) { fail(err); }
+  };
 }
 
 function bindSettings(admin) {
@@ -1256,17 +1305,6 @@ function bindSettings(admin) {
       winter_months: $$("#s-months input:checked").map((i) => Number(i.value)),
       winter_multiplier: Number($("#s-mult").value),
     });
-    const notifyBody = () => ({
-      notify_urls: $("#n-urls").value, notify_mode: $("#n-mode").value, notify_hour: Number($("#n-hour").value),
-      quiet_start: Number($("#n-qs").value), quiet_end: Number($("#n-qe").value),
-      overdue_repeat_days: Number($("#n-rep").value || 0), public_url: $("#n-url").value,
-    });
-    $("#n-save").onclick = async () => {
-      try { await api("/api/notifications", { method: "PUT", body: notifyBody() }); toast("Notifications saved"); } catch (err) { fail(err); }
-    };
-    $("#n-test").onclick = async () => {
-      try { await api("/api/notifications", { method: "PUT", body: notifyBody() }); await api("/api/notifications/test", { method: "POST" }); toast("Test sent"); } catch (err) { fail(err); }
-    };
     $$("[data-uadmin]").forEach((b) => (b.onclick = () => updateUser(b.dataset.uadmin, { is_admin: b.dataset.val === "1" })));
     $$("[data-uactive]").forEach((b) => (b.onclick = () => updateUser(b.dataset.uactive, { active: b.dataset.val === "1" })));
     $$("[data-upw]").forEach((b) => (b.onclick = () => {
