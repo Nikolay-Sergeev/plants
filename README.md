@@ -1,4 +1,4 @@
-![Plants app banner](docs/banner.png)
+![Plants with the Today dashboard on desktop and phone](docs/banner.png)
 
 # Plants
 
@@ -8,40 +8,45 @@ Plants is in beta. Features, data formats, and the API may change until a stable
 
 Plants is a simple household plant care log with reminders. It shows what needs checking today, lets you tap **Done**, **Snooze**, or **Skip**, and keeps a photo timeline for every plant. You decide what each plant needs; the app just keeps track. It is self-hosted, multi-user, and runs as one Docker container with SQLite storage. No subscriptions, no cloud account, and your data stays on your server.
 
+This fork adds a layout that adapts from a desktop sidebar to phone tabs, a photo-first collection, and collapsible Settings. The Today page groups the room filter and **Select tasks** in one toolbar, with care and the five-day forecast side by side on wide screens.
+
 ## Screenshots
 
-**Today view** - upcoming care tasks and the weather at a glance.
+Screenshots use a demo household with generated plant photos and sample weather.
 
-![Today view with upcoming plant care tasks](docs/screenshots/plants-today-blurred.jpg)
+### Today
 
-**Plants grid** - browse plants and see what care is due.
+![Desktop Today page with the room filter above aligned Next 7 days and Weather panels](docs/screenshots/plants-today.png)
 
-![Plants grid with care status](docs/screenshots/plants-grid-blurred.jpg)
+### Plant collection
 
-**Plant detail and timeline** - care tasks, photos, and activity for one plant.
+![Light-mode plant collection with photos, a search field, and a room filter](docs/screenshots/plants-grid.jpg)
 
-![Plant detail with care tasks and timeline](docs/screenshots/plants-detail-blurred.jpg)
+### Plant detail and timeline
 
-**Mobile view** - Plants on a phone.
+![Monstera profile with care tasks, growth photos, and recent activity](docs/screenshots/plants-detail.jpg)
 
-<img src="docs/screenshots/plants-mobile-blurred.jpg" alt="Mobile view" width="380">
+### Today on a phone
+
+<img src="docs/screenshots/plants-mobile.png" alt="Phone layout with due tasks first, collapsible upcoming tasks and weather, and bottom tabs" width="390">
 
 ## Quick start
 
-1. Run Plants with Docker, keeping its data in a folder on the host:
+1. Build this fork and run it with Docker. The `./data` folder on the host stores your data.
 
    ```sh
-   docker run -d --name plants -p 8653:8000 -v ./data:/app/data -e TZ=America/Chicago ghcr.io/dhrandy/plants:latest
+   git clone https://github.com/Nikolay-Sergeev/plants.git
+   cd plants
+   docker build -t plants:local .
+   docker run -d --name plants -p 8653:8000 -v ./data:/app/data -e TZ=America/Chicago plants:local
    ```
 
-   The examples pull `latest`. To pin a version instead, use a version tag such as `ghcr.io/dhrandy/plants:v0.3.5`.
-
-   Or with Docker Compose. Save this as `docker-compose.yml` (the repo includes the same file):
+   To use Docker Compose, build the same image and save the following as `compose.local.yml` next to the Dockerfile.
 
    ```yaml
    services:
      plants:
-       image: ghcr.io/dhrandy/plants:latest
+       image: plants:local
        container_name: plants
        restart: unless-stopped
        volumes:
@@ -64,7 +69,7 @@ Plants is a simple household plant care log with reminders. It shows what needs 
          - 8653:8000
    ```
 
-   Create a `.env` file next to `docker-compose.yml`. Docker Compose reads it automatically. Copy this example and change the values for your setup:
+   Create a `.env` file next to `compose.local.yml`. Docker Compose reads it automatically. Copy this example and adjust the values for your setup.
 
    ```dotenv
    TZ=UTC
@@ -76,10 +81,10 @@ Plants is a simple household plant care log with reminders. It shows what needs 
    PLANTS_PLANTNET_API_KEY=
    ```
 
-   Set `PLANTS_COOKIE_SECURE=true` behind HTTPS and `FORWARDED_ALLOW_IPS` to your reverse proxy's IP. Leave the push and photo ID values blank unless you set up those features below. For push, use your generated VAPID keys and a contact such as `mailto:you@example.com` for `PLANTS_VAPID_SUBJECT`. For photo ID, use your own Pl@ntNet key. Then start it:
+   Set `PLANTS_COOKIE_SECURE=true` behind HTTPS and `FORWARDED_ALLOW_IPS` to your reverse proxy's IP. Leave the push and photo ID values blank unless you set up those features below. For push, use your generated VAPID keys and a contact such as `mailto:you@example.com` for `PLANTS_VAPID_SUBJECT`. For photo ID, use your own Pl@ntNet key. To start the stack, run the following command.
 
    ```sh
-   docker compose up -d
+   docker compose -f compose.local.yml up -d
    ```
 
 2. Open `http://your-server:8653`.
@@ -89,13 +94,13 @@ Fresh installs start with one example plant that you can edit or delete.
 
 ### Using a Docker manager
 
-Any tool that accepts a compose file works: paste the block above into a new stack in Portainer, Dockhand, CasaOS, Synology Container Manager, or similar. Set the same variables in its Environment tab instead of a `.env` file. Make sure the `./data` volume points somewhere that is backed up.
+Build `plants:local` on the Docker host your manager uses, then paste the Compose block above into a new stack. Set the variables in its Environment tab. Point the `./data` volume to a directory you back up.
 
 ## Features
 
-- **Today view**: Overdue, Today, and Next 7 days, with the reason for each due date ("every 7 days, last done Sep 20"). Filter by room.
+- **Today view** groups overdue tasks, tasks due today, and the next seven days. Filter by room and open a task's **More actions** menu for its schedule, Snooze, or Skip.
 - **Done, Snooze, Skip**: Done logs the care. Snooze pushes it 1, 3, 7, or any number of days; snoozed tasks show a "Snoozed to" badge and an **Unsnooze** button. **Snooze plant** (or the "all due tasks" box in the snooze menu) snoozes everything due on a plant at once. Skip means you checked and it doesn't need it yet; the cycle restarts from today without changing the last-watered date. **Log…** on a plant lets you backdate care and add a note.
-- **Batch care**: tick several plants (or **Select all** in a section, filtered by room) and mark them done, snoozed, or skipped at once.
+- **Batch care** starts with **Select tasks**. Choose individual tasks or use **Select all** in a section to log, snooze, or skip them together.
 - **Plant profiles**: name, species (whatever the tag says), room, light, pot size and material, acquired date, indoor or outdoor, **Info** (free text about the plant), care notes, and a care source link. Info is separate from care notes, so existing notes stay as they are.
 - **Care tasks**: watering, fertilizing, misting, repotting, rotating, or custom, each with its own check interval and optional winter interval. All of them show on Today next to watering. When adding a plant, tap **+ Fertilize**, **+ Mist**, **+ Repot**, **+ Rotate** to add a task with a sensible starting interval. Duplicate a plant to copy its setup.
 - **Starter library**: twelve common houseplants that pre-fill species, light, care notes, and conservative starting intervals, each linked to its NC State Extension Plant Toolbox page. Everything stays editable; intervals mean "check the soil", not "water now".
@@ -146,7 +151,7 @@ Plants can send care reminders straight to a browser or an installed home-screen
 **1. Generate a VAPID key pair once.** The keys identify your server to the browsers' push services. Run:
 
 ```sh
-docker run --rm ghcr.io/dhrandy/plants:latest python -m app.vapid
+docker run --rm plants:local python -m app.vapid
 ```
 
 It prints two lines:
@@ -258,7 +263,7 @@ Administrators can disable token sign-in under **Settings → Features → API t
 
 ## Mobile layout
 
-Plants is built for phones first. Buttons and toggles are at least 44px tall, form fields use a 16px font so iOS doesn't zoom on focus, the section tabs stay pinned at the top, dialogs open as bottom sheets, nothing scrolls sideways at 360px, and the layout respects the notch and home-indicator safe areas.
+On phones, the bottom tabs keep Today, Plants, and Settings within reach. Today shows due tasks first, with **Next 7 days** and **Weather** collapsed by default. Both sections open by default on tablets and desktops. To install Plants on an iPhone or iPad, open it in Safari and choose **Share → Add to Home Screen**.
 
 ## Reverse proxy and security
 
@@ -298,9 +303,11 @@ PYTHONPATH=. pytest -q
 PLANTS_DATA_DIR=./data uvicorn app.main:app --reload
 ```
 
-The test suite covers the API (including real push encryption, checked by decrypting it with a browser-style key) and runs browser tests at 1920px and 390px. The push browser test uses full Chromium, which `playwright install chromium` includes. GitHub Actions runs it on every push to `main` before building and publishing the image to `ghcr.io/dhrandy/plants`.
+The test suite covers the API and browser flows at desktop and phone widths. The push browser test uses full Chromium, which `playwright install chromium` includes. The Docker workflow runs tests before building an image when app changes reach `main`, or when the workflow is run manually.
 
 ## Credits
+
+Plants was originally developed by [dhrandy/plants](https://github.com/dhrandy/plants).
 
 Weather data by [Open-Meteo.com](https://open-meteo.com/) (CC BY 4.0). Starter library care notes summarized from the [North Carolina Extension Gardener Plant Toolbox](https://plants.ces.ncsu.edu/).
 
