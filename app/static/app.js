@@ -5,7 +5,12 @@ const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const esc = (v) =>
   String(v ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]);
-const KIND_ICON = { water: "💧", fertilize: "🧪", mist: "🌫️", repot: "🪴", rotate: "🔄", custom: "✅" };
+const glyph = (shape) => `<svg class="glyph" viewBox="0 0 24 24" aria-hidden="true">${shape}</svg>`;
+const leafIcon = glyph('<path d="M5 19c0-8 5-14 15-14 0 9-4 14-10 14a5 5 0 0 1-5-5m-1 7 11-11"/>');
+const dropIcon = glyph('<path d="M12 3c-3.4 4.4-6.5 7.7-6.5 11.5a6.5 6.5 0 0 0 13 0C18.5 10.7 15.4 7.4 12 3Zm-3 12a3 3 0 0 0 3 3"/>');
+const checkIcon = glyph('<circle cx="12" cy="12" r="8.5"/><path d="m8.5 12 2.3 2.3 4.7-4.7"/>');
+const addIcon = glyph('<path d="M12 5v14M5 12h14"/>');
+const searchIcon = glyph('<circle cx="10.5" cy="10.5" r="5.5"/><path d="m15 15 4 4"/>');
 const KINDS = [["water", "Water"], ["fertilize", "Fertilize"], ["mist", "Mist"], ["repot", "Repot"], ["rotate", "Rotate"], ["custom", "Custom"]];
 // Starting intervals when a task type is picked; always editable.
 const KIND_DAYS = { water: 7, fertilize: 30, mist: 3, repot: 365, rotate: 7, custom: 14 };
@@ -74,37 +79,47 @@ function whenText(days) {
   return `In ${days} days`;
 }
 
-function thumb(photo, name, href) {
-  const inner = photo && !(state.me && state.me.token_session) ? `<img src="${esc(photo)}" alt="" loading="lazy">` : "🪴";
-  return href ? `<a class="thumb" href="${href}" aria-label="${esc(name)}">${inner}</a>` : `<span class="thumb">${inner}</span>`;
+function thumb(photo) {
+  const inner = photo && !state.me?.token_session ? `<img src="${esc(photo)}" alt="" loading="lazy">` : leafIcon;
+  return `<span class="thumb" aria-hidden="true">${inner}</span>`;
 }
 
 // ---------------------------------------------------------------- modal
 
 function openModal(html, onOpen) {
   const modal = $("#modal");
-  $("#sheet").innerHTML = html;
-  modal.hidden = false;
-  document.body.style.overflow = "hidden";
-  $$("[data-close]", modal).forEach((b) => (b.onclick = closeModal));
-  if (onOpen) onOpen($("#sheet"));
-  const first = $("input:not([type=hidden]):not([type=checkbox]):not([type=file]), select, textarea", $("#sheet"));
-  if (first && window.innerWidth > 650) first.focus();
+  const sheet = $("#sheet");
+  sheet.innerHTML = html;
+  const title = $("h2", sheet);
+  title.id = "sheet-title";
+  title.tabIndex = -1;
+  title.setAttribute("autofocus", "");
+  const status = $("#toast");
+  status.hidden = true;
+  modal.append(status);
+  $$("[data-close]", sheet).forEach((b) => (b.onclick = closeModal));
+  if (onOpen) onOpen(sheet);
+  if (modal.open) title.focus();
+  else modal.showModal();
+  modal.scrollTop = 0;
 }
 
 function closeModal() {
-  $("#modal").hidden = true;
+  const modal = $("#modal");
+  if (!modal.open) return;
+  modal.close();
+  document.body.append($("#toast"));
   $("#sheet").innerHTML = "";
-  document.body.style.overflow = "";
 }
 
 $("#modal").addEventListener("click", (e) => { if (e.target.id === "modal") closeModal(); });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#modal").hidden) closeModal(); });
+$("#modal").addEventListener("cancel", (e) => { e.preventDefault(); closeModal(); });
 
 // ---------------------------------------------------------------- auth
 
 async function showAuth() {
   ++viewRevision;
+  closeModal();
   $("#top").hidden = true;
   const status = await api("/api/status", { allow401: true });
   const setup = status.setup_required;
@@ -116,7 +131,7 @@ async function showAuth() {
         ${setup ? '<p class="muted">Create the first account. It becomes the administrator.</p>' : ""}
         <div><label for="username">Username</label><input id="username" name="username" autocomplete="username" ${setup ? "required" : ""}></div>
         <div><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="${setup ? "new-password" : "current-password"}" required ${setup ? 'minlength="8"' : ""}></div>
-        <p class="error" id="auth-error"></p>
+        <p class="error" id="auth-error" role="alert"></p>
         <button class="primary" type="submit">${setup ? "Create administrator" : "Sign in"}</button>
       </form>`;
     $("#auth-form").onsubmit = async (e) => {
@@ -180,25 +195,32 @@ async function boot() {
   route();
 }
 
-async function route() {
+async function route(moveFocus = false) {
   ++viewRevision;
   if (!state.me) return;
   closeModal();
   const hash = location.hash || "#/";
   const m = hash.match(/^#\/plant\/(\d+)/);
   const tab = m || hash.startsWith("#/plants") ? "plants" : hash.startsWith("#/settings") ? "settings" : "today";
-  $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
+  $$(".tab").forEach((t) => {
+    const active = t.dataset.tab === tab;
+    t.classList.toggle("active", active);
+    if (active) t.setAttribute("aria-current", "page");
+    else t.removeAttribute("aria-current");
+  });
   try {
     if (m) await renderPlant(Number(m[1]));
     else if (tab === "plants") await renderPlants();
     else if (tab === "settings") await renderSettings();
     else await renderToday();
+    if (moveFocus && (location.hash || "#/") === hash) $("#view").focus({ preventScroll: true });
   } catch (err) {
-    if (!(err instanceof ApiError && err.message === "Please sign in again")) fail(err);
+    if ((location.hash || "#/") === hash &&
+        !(err instanceof ApiError && err.message === "Please sign in again")) fail(err);
   }
 }
 
-window.addEventListener("hashchange", () => { window.scrollTo(0, 0); route(); });
+window.addEventListener("hashchange", () => { window.scrollTo(0, 0); route(true); });
 
 async function refresh() { await route(); }
 
@@ -206,18 +228,17 @@ async function refresh() { await route(); }
 
 function weatherHtml(w) {
   if (!w || !w.configured) {
-    return `<section class="card weather" id="weather"><div class="muted">
-      Local weather shows here once a location is set.
-      ${state.me.is_admin ? '<a href="#/settings">Set location in Settings</a>' : "Ask an administrator to set it in Settings."}</div></section>`;
+    return `<section class="card weather" id="weather"><h2>Weather</h2><div class="muted">
+      ${state.me.is_admin && !state.me.token_session ? '<a href="#/settings">Set a weather location</a>' : "No weather location is set."}</div></section>`;
   }
-  if (w.error) return `<section class="card weather" id="weather"><div class="muted">${esc(w.location)}: ${esc(w.error)}</div></section>`;
+  if (w.error) return `<section class="card weather" id="weather"><h2>Weather</h2><div class="muted">${esc(w.location)}: ${esc(w.error)}</div></section>`;
   const u = w.units;
   const c = w.current;
   const days = w.daily.map((d) => `
     <div class="wx-day"><b>${esc(d.short)}</b>${Math.round(d.high)}° / ${Math.round(d.low)}°
     <div class="wx-rain">${d.precip_probability ?? 0}%<span class="wx-amt"> · ${Number(d.precip || 0).toFixed(2)} ${esc(u.precipitation)}</span></div>
     <div class="muted">${esc(d.summary)}</div></div>`).join("");
-  return `<section class="card weather" id="weather">
+  return `<section class="card weather" id="weather"><h2>Weather</h2>
     <div class="wx-now">
       <div class="wx-temp">${Math.round(c.temperature)}${esc(u.temperature)}</div>
       <div><b>${esc(w.location || "Weather")}</b><div>${esc(c.summary)}</div>
@@ -232,18 +253,19 @@ function weatherHtml(w) {
 
 function dueRow(i) {
   const sel = state.selected.has(i.task_id);
-  return `<div class="due ${sel ? "sel" : ""}" data-task="${i.task_id}">
-    <label class="checkwrap" aria-label="Select ${esc(i.plant_name)}"><input class="check" type="checkbox" ${sel ? "checked" : ""} data-select="${i.task_id}"></label>
-    ${thumb(i.photo, i.plant_name, `#/plant/${i.plant_id}`)}
-    <div class="due-main">
-      <a class="due-name" href="#/plant/${i.plant_id}">${esc(i.plant_name)}</a>
-      <div class="due-when ${i.state}">${KIND_ICON[i.kind] || ""} ${esc(i.label)} · ${whenText(i.days)}</div>
-      <div class="due-meta">${esc([i.room, i.outdoor ? "Outdoor" : ""].filter(Boolean).join(" · "))}${i.room || i.outdoor ? " · " : ""}${esc(i.reason)}</div>
-    </div>
+  return `<div class="due ${sel ? "sel" : ""}" data-task="${i.task_id}" role="group" aria-labelledby="due-name-${i.task_id}">
+    <label class="checkwrap"><input class="check" type="checkbox" aria-label="Select ${esc(i.label)} for ${esc(i.plant_name)}" ${sel ? "checked" : ""} data-select="${i.task_id}"></label>
+    <a class="due-plant" href="#/plant/${i.plant_id}" aria-labelledby="due-name-${i.task_id}" aria-describedby="due-status-${i.task_id}">${thumb(i.photo)}
+      <span class="due-main">
+        <span class="due-name" id="due-name-${i.task_id}">${esc(i.plant_name)}</span>
+        <span class="due-when" id="due-status-${i.task_id}">${esc(i.label)} <span class="status ${i.state}">${whenText(i.days)}</span></span>
+        <span class="due-meta">${esc([i.room, i.outdoor ? "Outdoor" : "", i.reason].filter(Boolean).join(" · "))}</span>
+      </span>
+    </a>
     <div class="due-actions">
       <button class="primary due-done" data-act="done" data-id="${i.task_id}">Done</button>
-      <button data-act="snooze" data-id="${i.task_id}" data-plant="${i.plant_id}" data-plantdue="${i.plant_due || 0}" data-name="${esc(i.plant_name)}">Snooze</button>
-      <button data-act="skip" data-id="${i.task_id}" title="Checked it, doesn't need it yet">Skip</button>
+      <button class="ghost" data-act="snooze" data-id="${i.task_id}" data-plant="${i.plant_id}" data-plantdue="${i.plant_due || 0}" data-name="${esc(i.plant_name)}">Snooze</button>
+      <button class="ghost" data-act="skip" data-id="${i.task_id}" title="Checked it, doesn't need it yet">Skip</button>
     </div>
     <div class="due-confirm" hidden>
       <span>Log ${esc(i.label)} for ${esc(i.plant_name)}?</span>
@@ -270,34 +292,43 @@ async function renderToday() {
   state.selected = new Set([...state.selected].filter((id) => visible.has(id)));
   const groups = [
     ["overdue", "Overdue", items.filter((i) => i.state === "overdue")],
-    ["today", "Today", items.filter((i) => i.state === "today")],
+    ["today", "Due today", items.filter((i) => i.state === "today")],
     ["upcoming", "Next 7 days", items.filter((i) => i.state === "upcoming")],
   ];
   const needNow = groups[0][2].length + groups[1][2].length;
+  const waterDue = items.some((i) => i.days <= 0 && i.kind === "water");
+  const dateLabel = new Intl.DateTimeFormat(undefined, { weekday: "long", month: "long", day: "numeric" }).format(new Date());
   $("#view").innerHTML = `
-    <section class="card weather" id="weather" aria-busy="true"><div class="muted">Loading weather...</div></section>
-    <div class="pagehead"><div><h1>Today</h1>
-      <div class="muted">${needNow ? `${needNow} thing${needNow === 1 ? "" : "s"} to check. Feel the soil first; Skip if it's still moist.` : "Nothing due. Nice."}</div></div>
-    </div>
-    ${rooms.length > 1 ? `<div class="chips" role="group" aria-label="Filter by room">
-      <button class="chip ${state.roomFilter === "all" ? "active" : ""}" data-room="all">All rooms</button>
-      ${rooms.map((r) => `<button class="chip ${state.roomFilter === r ? "active" : ""}" data-room="${esc(r)}">${esc(r)}</button>`).join("")}
-    </div>` : ""}
-    ${groups.map(([cls, title, list]) => list.length ? `
-      <h2 class="section-title ${cls}">${title} <span class="count">${list.length}</span>
-        <button class="small ghost" data-selectgroup="${cls}">Select all</button></h2>
-      <div class="due-list">${list.map(dueRow).join("")}</div>` : "").join("")}
-    ${items.length ? "" : `<div class="card empty">Nothing due in the next week${state.roomFilter !== "all" ? " in this room" : ""}.<br><a href="#/plants">See all plants</a></div>`}
-    <div class="batchbar" id="batchbar" ${state.selected.size ? "" : "hidden"}>
-      <b id="batch-count"></b>
-      <button class="primary" data-batch="done">Done</button>
-      <span class="batch-confirm" hidden>Log <span id="batch-confirm-count"></span> selected?
-        <button class="primary" data-batch-confirm>Yes, log</button>
-        <button data-batch-cancel>Cancel</button>
-      </span>
-      <button data-batch="snooze">Snooze</button>
-      <button data-batch="skip">Skip</button>
-      <button class="ghost" data-batch="clear">Clear</button>
+    <header><p class="today-date"><time datetime="${localToday()}">${esc(dateLabel)}</time></p><h1>Today</h1></header>
+    <section class="care-summary">
+      <span class="summary-icon" aria-hidden="true">${waterDue ? dropIcon : needNow ? leafIcon : checkIcon}</span>
+      <div><h2>${needNow ? `${needNow} care check${needNow === 1 ? "" : "s"} due` : "You're caught up for today"}</h2>
+      ${waterDue ? "<p>Check the soil first. If it's still moist, choose Skip.</p>" : ""}</div>
+    </section>
+    <div class="today-layout">
+      <div class="care-list">
+        ${rooms.length > 1 ? `<div class="chips" role="group" aria-label="Filter by room">
+          ${["all", ...rooms].map((r) => `<button class="chip ${state.roomFilter === r ? "active" : ""}" aria-pressed="${state.roomFilter === r}" data-room="${esc(r)}">${esc(r === "all" ? "All rooms" : r)}</button>`).join("")}
+        </div>` : ""}
+        ${groups.map(([cls, title, list]) => list.length ? `<section class="care-group">
+          <div class="group-head"><h2 class="section-title ${cls}">${title} <span class="count">${list.length}</span></h2>
+            ${list.length > 1 ? `<button class="small ghost" data-selectgroup="${cls}">Select all</button>` : ""}</div>
+          <div class="due-list">${list.map(dueRow).join("")}</div>
+        </section>` : "").join("")}
+        ${items.length ? "" : `<div class="card empty">Nothing due in the next week${state.roomFilter !== "all" ? " in this room" : ""}.<br><a href="#/plants">See all plants</a></div>`}
+        <div class="batchbar" id="batchbar" hidden>
+          <b id="batch-count" role="status"></b>
+          <button class="primary" data-batch="done">Done</button>
+          <button data-batch="snooze">Snooze</button>
+          <button data-batch="skip">Skip</button>
+          <button class="ghost" data-batch="clear">Clear</button>
+          <span class="batch-confirm" hidden><span>Log <span id="batch-confirm-count"></span> selected?</span>
+            <button class="primary" data-batch-confirm>Yes, log</button>
+            <button data-batch-cancel>Cancel</button>
+          </span>
+        </div>
+      </div>
+      <section class="card weather" id="weather" aria-busy="true"><h2>Weather</h2><div class="muted">Loading weather...</div></section>
     </div>`;
   updateBatchBar();
   weather.then((result) => {
@@ -306,7 +337,15 @@ async function renderToday() {
     if (region) region.outerHTML = weatherHtml(result);
   });
 
-  $$("[data-room]").forEach((b) => (b.onclick = () => { state.roomFilter = b.dataset.room; state.selected.clear(); renderToday(); }));
+  $$("[data-room]").forEach((b) => (b.onclick = async () => {
+    if (b.dataset.room === state.roomFilter) return;
+    state.roomFilter = b.dataset.room;
+    state.selected.clear();
+    try {
+      await renderToday();
+      $("[data-room].active")?.focus({ preventScroll: true });
+    } catch (err) { fail(err); }
+  }));
   $$("[data-select]").forEach((cb) => (cb.onchange = () => {
     const id = Number(cb.dataset.select);
     cb.checked ? state.selected.add(id) : state.selected.delete(id);
@@ -314,9 +353,12 @@ async function renderToday() {
     updateBatchBar();
   }));
   $$("[data-selectgroup]").forEach((b) => (b.onclick = () => {
-    const list = groups.find((g) => g[0] === b.dataset.selectgroup)[2];
-    list.forEach((i) => state.selected.add(i.task_id));
-    renderToday();
+    $$("[data-select]", b.closest(".care-group")).forEach((cb) => {
+      cb.checked = true;
+      state.selected.add(Number(cb.dataset.select));
+      cb.closest(".due").classList.add("sel");
+    });
+    updateBatchBar();
   }));
   bindCareButtons($("#view"), renderToday);
   $$("[data-batch]").forEach((b) => (b.onclick = () => batchAction(b.dataset.batch)));
@@ -325,13 +367,18 @@ async function renderToday() {
     care(Number(b.dataset.confirmDone), "done", {}, renderToday);
   }));
   $$("[data-cancel-done]").forEach((b) => (b.onclick = () => {
-    b.closest(".due-confirm").hidden = true;
+    const row = b.closest(".due");
+    $(".due-confirm", row).hidden = true;
+    $(".due-done", row).focus();
   }));
   $("[data-batch-confirm]").onclick = (e) => {
     e.currentTarget.disabled = true;
     batchAction("done", true);
   };
-  $("[data-batch-cancel]").onclick = () => { $(".batch-confirm").hidden = true; };
+  $("[data-batch-cancel]").onclick = () => {
+    $(".batch-confirm").hidden = true;
+    $("[data-batch=done]").focus();
+  };
 }
 
 function updateBatchBar() {
@@ -348,16 +395,22 @@ async function batchAction(action, confirmed = false) {
   if (action === "done" && !confirmed) {
     $("#batch-confirm-count").textContent = state.selected.size;
     $(".batch-confirm").hidden = false;
+    $("[data-batch-confirm]").focus();
     return;
   }
   const ids = [...state.selected];
+  const hash = location.hash;
   const run = async (extra = {}) => {
     try {
       await api("/api/care/batch", { method: "POST", body: { task_ids: ids, action, ...extra } });
       state.selected.clear();
       toast(`${ids.length} marked ${action === "done" ? "done" : action === "skip" ? "skipped" : "snoozed"}`);
-      renderToday();
-    } catch (err) { fail(err); $("[data-batch-confirm]").disabled = false; }
+      if (location.hash === hash) await renderToday();
+    } catch (err) {
+      fail(err);
+      const button = $("[data-batch-confirm]");
+      if (button) button.disabled = false;
+    }
   };
   if (action === "snooze") return snoozeMenu((days) => run({ days }));
   run();
@@ -378,7 +431,9 @@ function bindCareButtons(root, after) {
     if (act === "done" && b.closest(".due")) {
       const row = b.closest(".due");
       $$(".due-confirm", root).forEach((panel) => { if (panel !== $(".due-confirm", row)) panel.hidden = true; });
-      $(".due-confirm", row).hidden = false;
+      const panel = $(".due-confirm", row);
+      panel.hidden = false;
+      $("[data-confirm-done]", panel).focus();
       return;
     }
     care(id, act, {}, after);
@@ -386,10 +441,11 @@ function bindCareButtons(root, after) {
 }
 
 async function care(taskId, action, body, after) {
+  const hash = location.hash;
   try {
     await api(`/api/tasks/${taskId}/${action}`, { method: "POST", body });
     toast(action === "done" ? "Logged" : action === "skip" ? "Skipped until next cycle" : `Snoozed ${body.days} day${body.days === 1 ? "" : "s"}`);
-    await after();
+    if (location.hash === hash) await after();
   } catch (err) { fail(err); const button = $(`[data-confirm-done="${taskId}"]`); if (button) button.disabled = false; }
 }
 
@@ -424,7 +480,7 @@ function snoozeMenu(pick, whole = null) {
   openModal(`<h2>Snooze</h2><div class="menu">
       ${whole ? `<label class="toggle"><input type="checkbox" id="snooze-all"> All ${whole.count} due tasks for ${esc(whole.name)}</label>` : ""}
       <button data-days="1">1 day</button><button data-days="3">3 days</button><button data-days="7">7 days</button>
-      <div class="row"><input type="number" id="snooze-days" min="1" max="365" placeholder="Custom days" inputmode="numeric" style="flex:1">
+      <div class="row"><input type="number" id="snooze-days" min="1" max="365" placeholder="Custom days" aria-label="Custom days" inputmode="numeric" style="flex:1">
       <button class="primary" id="snooze-custom">Snooze</button></div>
     </div><div class="sheet-actions"><button data-close>Cancel</button></div>`, (sheet) => {
     const all = () => Boolean($("#snooze-all", sheet)?.checked);
@@ -454,46 +510,56 @@ function logCareModal(taskId, after) {
 // ---------------------------------------------------------------- plants list
 
 async function renderPlants() {
+  const revision = ++viewRevision;
   const plants = await api("/api/plants");
+  if (revision !== viewRevision) return;
   const rooms = [...new Set(plants.map((p) => p.room || "No room"))].sort();
   if (state.plantRoom !== "all" && !rooms.includes(state.plantRoom)) state.plantRoom = "all";
   $("#view").innerHTML = `
-    <div class="pagehead"><div><h1>Plants</h1><div class="muted" id="plant-count"></div></div>
-      <button class="primary" id="add-plant">Add plant</button></div>
-    <div class="toolbar"><input type="search" id="plant-search" placeholder="Search plants" value="${esc(state.search)}" aria-label="Search plants"></div>
+    <div class="pagehead"><div><h1>Plants</h1><div class="muted" id="plant-count" role="status"></div></div>
+      <button class="primary" id="add-plant">${addIcon}Add plant</button></div>
+    <div class="toolbar"><div class="search-field">${searchIcon}<input type="search" id="plant-search" placeholder="Search plants" value="${esc(state.search)}" aria-label="Search plants"></div></div>
     ${rooms.length > 1 ? `<div class="chips" role="group" aria-label="Filter by room">
-      <button class="chip ${state.plantRoom === "all" ? "active" : ""}" data-proom="all">All</button>
-      ${rooms.map((r) => `<button class="chip ${state.plantRoom === r ? "active" : ""}" data-proom="${esc(r)}">${esc(r)}</button>`).join("")}</div>` : ""}
+      ${["all", ...rooms].map((r) => `<button class="chip" data-proom="${esc(r)}">${esc(r === "all" ? "All rooms" : r)}</button>`).join("")}</div>` : ""}
     <div class="grid" id="plant-grid"></div>`;
   const draw = () => {
     const q = state.search.trim().toLowerCase();
     const list = plants.filter((p) =>
       (state.plantRoom === "all" || (p.room || "No room") === state.plantRoom) &&
       (!q || [p.name, p.species, p.room].join(" ").toLowerCase().includes(q)));
-    $("#plant-count").textContent = `${list.length} of ${plants.length} plant${plants.length === 1 ? "" : "s"}`;
+    const total = `${plants.length} plant${plants.length === 1 ? "" : "s"}`;
+    $("#plant-count").textContent = list.length === plants.length ? total : `${list.length} of ${total}`;
     $("#plant-grid").innerHTML = list.length ? list.map((p) => {
       const n = p.next;
-      return `<a class="plant-card" href="#/plant/${p.id}">${thumb(p.photo, p.name)}
+      const details = [p.species, p.room].filter(Boolean).join(" · ");
+      return `<a class="plant-card" href="#/plant/${p.id}">${thumb(p.photo)}
         <div class="pc-body"><div class="pc-name">${esc(p.name)}</div>
-        <div class="muted">${esc([p.species, p.room].filter(Boolean).join(" · ") || "No details yet")}</div>
-        ${n ? `<div class="due-when ${n.state}">${KIND_ICON[n.kind] || ""} ${esc(n.label)} · ${whenText(n.days)}</div>` : '<div class="muted">No care tasks</div>'}
+        ${details ? `<div class="pc-meta muted">${esc(details)}</div>` : ""}
+        ${n ? `<div class="due-when ${n.state}">${esc(n.label)} · ${whenText(n.days)}</div>` : '<div class="due-when muted">No care tasks</div>'}
         </div></a>`;
     }).join("") : `<div class="card empty">${plants.length ? "No plants match." : "No plants yet. Add your first one."}</div>`;
+    $$("[data-proom]").forEach((b) => {
+      const active = b.dataset.proom === state.plantRoom;
+      b.classList.toggle("active", active);
+      b.setAttribute("aria-pressed", String(active));
+    });
   };
   draw();
   $("#plant-search").oninput = (e) => { state.search = e.target.value; draw(); };
-  $$("[data-proom]").forEach((b) => (b.onclick = () => { state.plantRoom = b.dataset.proom; renderPlants(); }));
+  $$("[data-proom]").forEach((b) => (b.onclick = () => { state.plantRoom = b.dataset.proom; draw(); }));
   $("#add-plant").onclick = () => plantForm(null);
 }
 
 // ---------------------------------------------------------------- plant detail
 
 async function renderPlant(id) {
+  const revision = ++viewRevision;
   const limited = state.me && state.me.token_session;
   const [p, events] = await Promise.all([
     api(`/api/plants/${id}`),
     limited ? Promise.resolve([]) : api(`/api/plants/${id}/events`),
   ]);
+  if (revision !== viewRevision) return;
   const facts = [
     ["Species", p.species], ["Room", p.room], ["Light", p.light], ["Pot", [p.pot_size, p.pot_material].filter(Boolean).join(", ")],
     ["Acquired", fmtDate(p.acquired)], ["Where", p.outdoor ? "Outdoor" : "Indoor"], ["Added by", p.added_by],
@@ -502,34 +568,28 @@ async function renderPlant(id) {
   const dueNow = p.tasks.filter((t) => t.days <= 0).length;
   const photos = events.filter((e) => e.photo).sort((a, b) => (a.date === b.date ? a.id - b.id : a.date < b.date ? -1 : 1));
   const growth = feature("growth_timeline");
+  const photo = !limited && p.photo;
   $("#view").innerHTML = `
-    <div class="hero">
-      <div class="hero-photo">${p.photo && !limited ? `<img src="${esc(p.photo)}" alt="${esc(p.name)}">` : "🪴"}</div>
+    <a class="back-link" href="#/plants">‹ All plants</a>
+    <div class="hero ${photo ? "hero-with-photo" : ""}">
+      ${photo ? `<div class="hero-photo"><img src="${esc(photo)}" alt="${esc(p.name)}"></div>` : ""}
       <div>
-        <p><a href="#/plants">← All plants</a></p>
-        <h1>${esc(p.name)}</h1>
-        <div class="facts">${facts.map(([k, v]) => `<div class="fact"><span>${k}</span>${esc(v)}</div>`).join("")}</div>
+        <h1>${photo ? "" : `<span class="summary-icon" aria-hidden="true">${leafIcon}</span>`}${esc(p.name)}</h1>
+        <dl class="facts">${facts.map(([k, v]) => `<div class="fact"><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>
         <div class="row">
+          <button class="primary" id="add-photo">Add photo or note</button>
           <button id="edit-plant">Edit</button>
-          <button id="add-photo">Add photo or note</button>
-          ${limited ? "" : '<button id="dup-plant">Duplicate</button>'}
-          ${dueNow ? `<button id="snooze-plant">Snooze plant</button>` : ""}
+          ${dueNow ? `<button class="ghost" id="snooze-plant">Snooze plant</button>` : ""}
+          ${limited ? "" : '<button class="ghost" id="dup-plant">Duplicate</button>'}
         </div>
       </div>
     </div>
-    ${feature("plant_info") ? `<section class="card settings-section"><h2 style="margin-top:0">Info</h2>
-      ${p.info ? `<div class="notes">${esc(p.info)}</div>` : `<p class="muted">No info yet. Edit this plant to add some.</p>`}
-    </section>` : ""}
-    ${p.notes || p.care_source ? `<section class="card settings-section"><h2 style="margin-top:0">Care notes</h2>
-      ${p.notes ? `<div class="notes">${esc(p.notes)}</div>` : ""}
-      ${p.care_source ? `<p class="hint">Source: <a href="${esc(p.care_source)}" target="_blank" rel="noopener">${esc(p.care_source.replace(/^https?:\/\//, "").split("/")[0])}</a></p>` : ""}
-    </section>` : ""}
     <section class="card settings-section">
       <div class="pagehead"><h2 style="margin:0">Care tasks</h2><button class="small" id="add-task">Add task</button></div>
       <div id="tasks">${p.tasks.length ? p.tasks.map((t) => `
         <div class="task">
-          <div><b>${KIND_ICON[t.kind] || ""} ${esc(t.label)}</b> <span class="due-when ${t.state}">· ${whenText(t.days)}</span>
-            ${t.snoozed ? `<span class="badge snoozed">💤 Snoozed to ${fmtDate(t.snoozed_until)}</span>` : ""}
+          <div><b class="task-name">${t.kind === "water" ? dropIcon : ""} ${esc(t.label)}</b> <span class="status ${t.state}">${whenText(t.days)}</span>
+            ${t.snoozed ? `<span class="badge snoozed">Snoozed to ${fmtDate(t.snoozed_until)}</span>` : ""}
             <div class="due-meta">${esc(t.reason)} · next ${fmtDate(t.next_due)}</div></div>
           <div class="row">
             <button class="primary" data-act="done" data-id="${t.id}">Done</button>
@@ -542,6 +602,13 @@ async function renderPlant(id) {
           </div>
         </div>`).join("") : '<p class="muted">No care tasks yet.</p>'}</div>
     </section>
+    ${p.notes || p.care_source ? `<section class="card settings-section"><h2>Care notes</h2>
+      ${p.notes ? `<div class="notes">${esc(p.notes)}</div>` : ""}
+      ${p.care_source ? `<p class="hint">Source: <a href="${esc(p.care_source)}" target="_blank" rel="noopener">${esc(p.care_source.replace(/^https?:\/\//, "").split("/")[0])}</a></p>` : ""}
+    </section>` : ""}
+    ${feature("plant_info") ? `<section class="card settings-section"><h2>Info</h2>
+      ${p.info ? `<div class="notes">${esc(p.info)}</div>` : `<p class="muted">No info yet. Edit this plant to add some.</p>`}
+    </section>` : ""}
     ${growth ? `<section class="card settings-section" id="growth">
       <div class="pagehead"><h2 style="margin:0">Growth</h2><span class="muted">${photos.length} photo${photos.length === 1 ? "" : "s"}</span></div>
       ${photos.length ? `<div class="growth-strip">${photos.map((e, i) => `
@@ -690,7 +757,7 @@ async function plantForm(p) {
         <div class="full"><label for="f-src">Care source link (optional)</label><input id="f-src" name="care_source" type="url" maxlength="300" value="${esc(p?.care_source)}" placeholder="https://"></div>
       </div>
       ${isNew ? `<h2>Care tasks</h2><div id="task-rows">${taskRow({ kind: "water", interval_days: 7 })}</div>
-        <div class="chips add-kinds" role="group" aria-label="Add a care task">${KINDS.filter(([k]) => k !== "water").map(([k, l]) => `<button type="button" class="chip" data-addkind="${k}">+ ${KIND_ICON[k]} ${l}</button>`).join("")}</div>` : ""}
+        <div class="chips add-kinds" role="group" aria-label="Add a care task">${KINDS.filter(([k]) => k !== "water").map(([k, l]) => `<button type="button" class="chip" data-addkind="${k}">+ ${l}</button>`).join("")}</div>` : ""}
       ${isNew ? `<div class="stack" style="margin-top:12px"><div><label for="f-photo">Photo (optional)</label><input id="f-photo" type="file" accept="image/*"></div></div>` : ""}
       <p class="error" id="form-error"></p>
       <div class="sheet-actions"><button type="button" data-close>Cancel</button><button class="primary" type="submit">${isNew ? "Add plant" : "Save"}</button></div>
@@ -872,6 +939,7 @@ function photoModal(p, after) {
 // ---------------------------------------------------------------- settings
 
 async function renderSettings() {
+  const revision = ++viewRevision;
   if (state.me && state.me.token_session) {
     $("#view").innerHTML = `<section class="card stack"><h1 style="margin-top:0">Settings</h1>
       <p class="muted">You're signed in with an API token. This session can only do what the token API can -
@@ -883,6 +951,7 @@ async function renderSettings() {
     api("/api/settings"), api("/api/rooms"), api("/api/tokens"),
     admin ? api("/api/notifications") : null, admin ? api("/api/users") : null,
   ]);
+  if (revision !== viewRevision) return;
   state.settings = settings;
   const hours = (sel) => Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === sel ? "selected" : ""}>${String(h).padStart(2, "0")}:00</option>`).join("");
   $("#view").innerHTML = `
