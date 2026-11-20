@@ -30,6 +30,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from app.library import LIBRARY, SOURCE as LIBRARY_SOURCE, care_suggestion
+from app.schedule import iso_date, task_status, today
 
 BASE = Path(__file__).resolve().parent
 DATA_DIR = Path(os.getenv("PLANTS_DATA_DIR", "/app/data"))
@@ -96,22 +97,8 @@ app = FastAPI(title="Plants", version="0.3.5", docs_url=None, openapi_url=None)
 # ---------------------------------------------------------------- helpers
 
 
-def today() -> date:
-    """Local date for the container's TZ, so 'due today' matches the wall clock."""
-    return datetime.now().astimezone().date()
-
-
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def iso_date(value: str | None) -> date | None:
-    if not value:
-        return None
-    try:
-        return datetime.strptime(str(value), "%Y-%m-%d").date()
-    except ValueError:
-        return None
 
 
 def check_date(value: str | None) -> str | None:
@@ -621,54 +608,6 @@ def season_config(c) -> dict[str, Any]:
     except ValueError:
         mult = 1.0
     return {"months": winter_months(c), "multiplier": mult}
-
-
-def task_status(task, season: dict[str, Any], on: date | None = None) -> dict[str, Any]:
-    """Work out when a task is next due and explain why, in plain words."""
-    on = on or today()
-    winter = on.month in season["months"]
-    interval = int(task["interval_days"])
-    effective = interval
-    season_note = ""
-    if winter and task["winter_interval_days"]:
-        effective = int(task["winter_interval_days"])
-        season_note = f"winter interval {effective} days"
-    elif winter and abs(season["multiplier"] - 1.0) > 1e-9:
-        effective = max(1, round(interval * season["multiplier"]))
-        season_note = f"winter x{season['multiplier']:g} = {effective} days"
-    start = iso_date(task["cycle_start"])
-    created = iso_date(str(task["created_at"])[:10]) or on
-    due = start + timedelta(days=effective) if start else created
-    snoozed = iso_date(task["snoozed_until"])
-    is_snoozed = bool(snoozed and snoozed > due and snoozed > on)
-    if snoozed and snoozed > due:
-        due = snoozed
-    days = (due - on).days
-    if days < 0:
-        state = "overdue"
-    elif days == 0:
-        state = "today"
-    elif days <= 7:
-        state = "upcoming"
-    else:
-        state = "later"
-    parts = [f"every {interval} days"]
-    if season_note:
-        parts.append(season_note)
-    last = iso_date(task["last_done"])
-    parts.append(f"last done {last.strftime('%b %-d')}" if last else "never logged")
-    if start and last and start > last:
-        parts.append(f"skipped {start.strftime('%b %-d')}")
-    if snoozed and snoozed >= on and snoozed == due:
-        parts.append(f"snoozed to {snoozed.strftime('%b %-d')}")
-    return {
-        "next_due": due.isoformat(),
-        "days": days,
-        "state": state,
-        "effective_interval": effective,
-        "snoozed": is_snoozed,
-        "reason": (lambda r: r[:1].upper() + r[1:])(", ".join(parts)),
-    }
 
 
 def task_dict(task, season) -> dict[str, Any]:

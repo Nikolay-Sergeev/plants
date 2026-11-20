@@ -565,11 +565,17 @@ def test_late_weather_cannot_replace_another_route_or_newer_render(app_url):
         weather[0].fulfill(status=200, content_type="application/json", body=json.dumps({
             "configured": True, "location": "Old route", "error": "Old weather"}))
         expect(page.locator("#weather")).to_have_count(0)
+        plant = page.request.post(f"{app_url}/api/plants", data={
+            "name": "Weather race fern", "tasks": [{"kind": "water", "interval_days": 5}],
+        })
+        assert plant.ok
         page.get_by_role("link", name="Today", exact=True).click()
         expect(page.get_by_role("heading", name="Today", exact=True)).to_be_visible()
         expect(page.locator("#weather")).to_contain_text("Loading weather...")
-        page.evaluate("refresh()")
-        expect(page.locator("#weather")).to_contain_text("Loading weather...")
+        task = page.locator(".due", has_text="Weather race fern")
+        task.get_by_role("button", name="Done", exact=True).click()
+        task.get_by_role("button", name="Yes, log", exact=True).click()
+        expect(task).to_contain_text("In 5 days")
         assert len(weather) == 3
         weather[2].fulfill(status=200, content_type="application/json", body=json.dumps({
             "configured": True, "location": "Newest", "error": "Newest weather"}))

@@ -1,24 +1,18 @@
-"use strict";
 // Plants - vanilla JS front end. No build step.
+import { $, $$, chevronIcon, esc, fail, fmtDate, glyph, leafIcon, toast } from "./ui.js?v=1";
+import { pushOff } from "./push.js?v=1";
+import { setSettingsDisclosures, showSettings } from "./settings.js?v=1";
+import { weatherHtml } from "./weather.js?v=1";
 
-const $ = (sel, root = document) => root.querySelector(sel);
-const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
-const esc = (v) =>
-  String(v ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]);
-const glyph = (shape) => `<svg class="glyph" viewBox="0 0 24 24" aria-hidden="true">${shape}</svg>`;
-const leafIcon = glyph('<path d="M5 19c0-8 5-14 15-14 0 9-4 14-10 14a5 5 0 0 1-5-5m-1 7 11-11"/>');
 const dropIcon = glyph('<path d="M12 3c-3.4 4.4-6.5 7.7-6.5 11.5a6.5 6.5 0 0 0 13 0C18.5 10.7 15.4 7.4 12 3Zm-3 12a3 3 0 0 0 3 3"/>');
 const addIcon = glyph('<path d="M12 5v14M5 12h14"/>');
 const searchIcon = glyph('<circle cx="10.5" cy="10.5" r="5.5"/><path d="m15 15 4 4"/>');
 const moreIcon = glyph('<path d="M5 12h.01m6.99 0h.01m6.99 0h.01" stroke-width="3"/>');
-const chevronIcon = glyph('<path d="m7 10 5 5 5-5"/>');
 const selectIcon = glyph('<rect x="4" y="4" width="16" height="16" rx="4"/><path d="m8 12 2.5 2.5L16 9"/>');
 const KINDS = [["water", "Water"], ["fertilize", "Fertilize"], ["mist", "Mist"], ["repot", "Repot"], ["rotate", "Rotate"], ["custom", "Custom"]];
 // Starting intervals when a task type is picked; always editable.
 const KIND_DAYS = { water: 7, fertilize: 30, mist: 3, repot: 365, rotate: 7, custom: 14 };
 const feature = (name) => !state.settings || state.settings[`feature_${name}`] !== false;
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
 const state = {
   me: null, settings: null, roomFilter: "", plantRoom: "", search: "",
   selecting: false, selected: new Set(), upcomingOpen: null, weatherOpen: null,
@@ -34,6 +28,21 @@ class ApiError extends Error {
   }
 }
 
+async function readApiResponse(response) {
+  const text = await response.text();
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+function apiErrorDetail(detail, fallback) {
+  if (!Array.isArray(detail)) return detail || fallback;
+  return detail.map(({ msg }) => msg.replace(/^Value error, /, "")).join("; ");
+}
+
 async function api(path, opts = {}) {
   const init = { method: opts.method || "GET", headers: {}, credentials: "same-origin", signal: opts.signal };
   if (opts.form) init.body = opts.form;
@@ -47,39 +56,16 @@ async function api(path, opts = {}) {
     await showAuth();
     throw new ApiError("Please sign in again", res.status);
   }
-  const text = await res.text();
-  let data = null;
-  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  const data = await readApiResponse(res);
   if (!res.ok) {
-    let msg = (data && data.detail) || res.statusText;
-    if (Array.isArray(msg)) msg = msg.map((d) => d.msg.replace(/^Value error, /, "")).join("; ");
-    throw new ApiError(msg, res.status);
+    throw new ApiError(apiErrorDetail(data?.detail, res.statusText), res.status);
   }
   return data;
 }
 
-let toastTimer;
-function toast(msg, undo) {
-  const el = $("#toast");
-  el.innerHTML = `<span>${esc(msg)}</span>${undo ? '<button class="small" type="button">Undo</button>' : ""}`;
-  el.hidden = false;
-  if (undo) $("button", el).onclick = () => { el.hidden = true; undo(); };
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (el.hidden = true), undo ? 6000 : 3000);
-}
-
-function fail(err) { toast(err.message || String(err)); }
-
 function localToday() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-function fmtDate(iso) {
-  if (!iso) return "";
-  const [y, m, d] = iso.slice(0, 10).split("-").map(Number);
-  const now = new Date();
-  return `${MONTHS[m - 1]} ${d}${y !== now.getFullYear() ? ", " + y : ""}`;
 }
 
 function whenText(days) {
@@ -173,7 +159,7 @@ async function showAuth() {
 }
 
 async function signOut() {
-  await pushOff().catch(() => {}); // a shared device shouldn't keep getting the last person's reminders
+  await pushOff(api).catch(() => {}); // a shared device shouldn't keep getting the last person's reminders
   await api("/api/logout", { method: "POST", allow401: true });
   state.me = null;
   state.selecting = false;
@@ -184,6 +170,11 @@ async function signOut() {
 $("#logout").onclick = () => signOut().catch(fail);
 
 // ---------------------------------------------------------------- routing
+
+function setAppName(name) {
+  $("#app-name").textContent = name;
+  document.title = name;
+}
 
 async function boot() {
   try {
@@ -196,12 +187,10 @@ async function boot() {
     // API-token sign-in: limited to what the token API can do, so Settings stays out of reach.
     state.settings = null;
     const status = await api("/api/status");
-    $("#app-name").textContent = status.app_name;
-    document.title = status.app_name;
+    setAppName(status.app_name);
   } else {
     state.settings = await api("/api/settings");
-    $("#app-name").textContent = state.settings.app_name;
-    document.title = state.settings.app_name;
+    setAppName(state.settings.app_name);
   }
   $("#top").hidden = false;
   $("#top").classList.toggle("token-session", state.me.token_session === true);
@@ -211,38 +200,49 @@ async function boot() {
   route();
 }
 
+function routeFor(hash) {
+  const plant = hash.match(/^#\/plant\/(\d+)/);
+  if (plant) return { tab: "plants", render: () => renderPlant(Number(plant[1])) };
+  if (hash.startsWith("#/plants")) return { tab: "plants", render: renderPlants };
+  if (hash.startsWith("#/settings")) {
+    return { tab: "settings", render: () => renderSettings(hash.split("/")[2] || "") };
+  }
+  return { tab: "today", render: renderToday };
+}
+
+const currentHash = () => location.hash || "#/";
+
+function setActiveTab(tab) {
+  for (const link of $$(".tab")) {
+    const active = link.dataset.tab === tab;
+    link.classList.toggle("active", active);
+    if (active) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  }
+}
+
 async function route(moveFocus = false) {
   ++viewRevision;
   if (!state.me) return;
   closeModal();
-  const hash = location.hash || "#/";
-  const m = hash.match(/^#\/plant\/(\d+)/);
-  const tab = m || hash.startsWith("#/plants") ? "plants" : hash.startsWith("#/settings") ? "settings" : "today";
+  const hash = currentHash();
+  const { tab, render } = routeFor(hash);
   if (tab !== "today") {
     state.selecting = false;
     state.selected.clear();
   }
-  $$(".tab").forEach((t) => {
-    const active = t.dataset.tab === tab;
-    t.classList.toggle("active", active);
-    if (active) t.setAttribute("aria-current", "page");
-    else t.removeAttribute("aria-current");
-  });
+  setActiveTab(tab);
   try {
-    if (m) await renderPlant(Number(m[1]));
-    else if (tab === "plants") await renderPlants();
-    else if (tab === "settings") await renderSettings(hash.split("/")[2] || "");
-    else await renderToday();
-    if (moveFocus && (location.hash || "#/") === hash) $("#view").focus({ preventScroll: true });
+    await render();
+    if (moveFocus && currentHash() === hash) $("#view").focus({ preventScroll: true });
   } catch (err) {
-    if ((location.hash || "#/") === hash &&
-        !(err instanceof ApiError && err.status === 401)) fail(err);
+    if (currentHash() !== hash) return;
+    if (err instanceof ApiError && err.status === 401) return;
+    fail(err);
   }
 }
 
 window.addEventListener("hashchange", () => { window.scrollTo(0, 0); route(true); });
-
-async function refresh() { await route(); }
 
 // ---------------------------------------------------------------- today
 
@@ -252,102 +252,6 @@ function roomPicker(id, rooms, selected) {
     <option value="">All rooms</option>
     ${rooms.map((r) => `<option value="${esc(r)}" ${r === selected ? "selected" : ""}>${esc(r)}</option>`).join("")}
   </select>`;
-}
-
-const weatherSymbols = [
-  [[0], "clear",
-    '<circle cx="12" cy="12" r="4.5"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/>',
-    '<path d="M20.5 15A8.5 8.5 0 0 1 9 3.5 8.5 8.5 0 1 0 20.5 15Z"/>'],
-  [[1, 2], "bright",
-    '<path d="M3 7h2m1-3 1.5 1.5M11 2v2m4.5 1.5L17 4m-2.2 6A4 4 0 1 0 7 12m.5 8a3.5 3.5 0 1 1 .7-6.9 5 5 0 0 1 9.4 1.9h1.4a2.5 2.5 0 1 1 0 5z"/>',
-    '<path d="M7.7 11.7a5.2 5.2 0 0 1 1.1-9A5 5 0 0 0 15.1 9M7.5 20a3.5 3.5 0 1 1 .7-6.9 5 5 0 0 1 9.4 1.9H19a2.5 2.5 0 1 1 0 5z"/>'],
-  [[3], "cloud", '<path d="M6.5 19a4 4 0 1 1 .8-7.9 5.5 5.5 0 0 1 10.5 2.4H19a2.75 2.75 0 0 1 0 5.5z"/>'],
-  [[45, 48], "cloud", '<path d="M5 13a3.2 3.2 0 1 1 1-6.2 5.2 5.2 0 0 1 9.9 1.4 2.6 2.6 0 1 1 3 4.8zM4 17h16M7 21h10"/>'],
-  [[51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82], "rain", '<path d="M6 15a3.5 3.5 0 1 1 .7-6.9 5 5 0 0 1 9.8 1.4H19a2.75 2.75 0 0 1 0 5.5zM9 18l-1 3m5-3-1 3m5-3-1 3"/>'],
-  [[71, 73, 75, 77, 85, 86], "cloud", '<path d="M6 14a3.5 3.5 0 1 1 .7-6.9 5 5 0 0 1 9.8 1.4H19a2.75 2.75 0 0 1 0 5.5zM7 18h.01m4 3h.01m2-3h.01m4 3h.01m2-3h.01"/>'],
-  [[95, 96, 99], "bright", '<path d="M8 14H6a3.5 3.5 0 1 1 .7-6.9 5 5 0 0 1 9.8 1.4H19a2.75 2.75 0 0 1 0 5.5h-2m-4-2-3 5h4l-2 5"/>'],
-];
-
-function weatherSymbol(code, isDay) {
-  const symbol = weatherSymbols.find(([codes]) => codes.includes(code));
-  if (!symbol) return "";
-  const [, tone, dayShape, nightShape] = symbol;
-  const night = isDay === 0 && nightShape;
-  return `<span class="wx-symbol wx-${night ? "night" : tone}">${glyph(night || dayShape)}</span>`;
-}
-
-function weatherValue(value, unit, round = false) {
-  return Number.isFinite(value) ? `${round ? Math.round(value) : value}${esc(unit)}` : "—";
-}
-
-function weatherHtml(w) {
-  const open = (state.weatherOpen ?? wideLayout.matches) ? "open" : "";
-  if (!w?.configured || w.error) {
-    const content = w?.error ? esc(w.error) : state.me.is_admin && !state.me.token_session
-      ? '<a href="#/settings/weather">Set a weather location</a>' : "No weather location is set.";
-    return `<details class="disclosure weather" id="weather" ${open}>
-      <summary><span>Weather</span>${chevronIcon}</summary><div class="disclosure-body muted">${content}</div></details>`;
-  }
-
-  const u = w.units;
-  const c = w.current;
-  const daily = w.daily;
-  const temperature = weatherValue(c.temperature, u.temperature, true);
-  const location = w.location || "Local weather";
-  const [city, ...region] = location.split(", ");
-  const temps = daily.flatMap(({ low, high }) => [low, high]).filter(Number.isFinite);
-  const min = temps.length ? Math.min(...temps) : 0;
-  const spread = temps.length ? Math.max(...temps) - min : 0;
-  const days = daily.map((d) => {
-    let range = "";
-    if (Number.isFinite(d.low) && Number.isFinite(d.high) && d.low <= d.high) {
-      const start = spread ? (d.low - min) / spread * 100 : 50;
-      const end = spread ? 100 - (d.high - min) / spread * 100 : 50;
-      range = `<span class="wx-range" style="--start:${start}%;--end:${end}%"></span>`;
-    }
-    const rain = Number.isFinite(d.precip_probability) && d.precip_probability > 0;
-    const details = [d.summary, rain ? `${d.precip_probability}% chance of precipitation` : "",
-      d.precip > 0 ? `${d.precip} ${u.precipitation} expected` : ""].filter(Boolean).join(" · ");
-    return `<li class="wx-day">
-      <span class="wx-day-name">${esc(d.short)}</span>
-      <span class="wx-condition" title="${esc(details)}">
-        <span aria-hidden="true">${weatherSymbol(d.code)}${rain ? `<small>${d.precip_probability}%</small>` : ""}</span>
-        <span class="sr-only">${esc(details)}</span>
-      </span>
-      <span class="wx-low"><span class="sr-only">Low </span>${weatherValue(d.low, "°", true)}</span>
-      <span class="wx-track" aria-hidden="true">${range}</span>
-      <span class="wx-high"><span class="sr-only">High </span>${weatherValue(d.high, "°", true)}</span>
-    </li>`;
-  }).join("");
-
-  return `<details class="disclosure weather weather-ready" id="weather" ${open}>
-    <summary><span>Weather</span><span class="disclosure-meta wx-summary">${temperature}${c.summary ? ` · ${esc(c.summary)}` : ""}</span>${chevronIcon}</summary>
-    <div class="disclosure-body weather-body">
-      <div class="wx-current">
-        <div>
-          <h2>${esc(city)}</h2>
-          ${region.length ? `<p class="wx-region">${esc(region.join(", "))}</p>` : ""}
-          <p class="wx-temperature">${temperature}</p>
-          ${c.summary ? `<p class="wx-description">${esc(c.summary)}</p>` : ""}
-          ${daily.length ? `<p class="wx-today-range">High ${weatherValue(daily[0].high, "°", true)} · Low ${weatherValue(daily[0].low, "°", true)}</p>` : ""}
-        </div>
-        <div class="wx-current-symbol" aria-hidden="true">${weatherSymbol(c.code, c.is_day)}</div>
-      </div>
-      <dl class="wx-stats">
-        <div><dt>Humidity</dt><dd>${weatherValue(c.humidity, "%")}</dd></div>
-        <div><dt>Wind</dt><dd>${weatherValue(c.wind, ` ${u.wind}`, true)}</dd></div>
-        <div><dt>Rain now</dt><dd>${weatherValue(c.precipitation, ` ${u.precipitation}`)}</dd></div>
-      </dl>
-      ${days ? `<section class="wx-forecast" aria-labelledby="weather-forecast-title">
-        <h2 id="weather-forecast-title">${daily.length}-day forecast</h2>
-        <ul class="wx-days" role="list">${days}</ul>
-      </section>` : ""}
-      ${w.hint ? `<p class="wx-hint">${leafIcon}<span>${esc(w.hint)}</span></p>` : ""}
-      <div class="wx-foot">
-        ${Number.isFinite(w.rain_total) && daily.length ? `<span>Rain over ${daily.length} days · ${weatherValue(w.rain_total, ` ${u.precipitation}`)}</span>` : ""}
-        <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>${w.stale ? "<span>Cached forecast</span>" : ""}
-      </div>
-    </div></details>`;
 }
 
 function dueRow(i) {
@@ -415,7 +319,10 @@ async function renderToday() {
   drawCare(due.items, rooms, dueByPlant);
   weather.then((result) => {
     if (revision !== viewRevision || !state.me) return;
-    $("#weather").outerHTML = weatherHtml(result);
+    $("#weather").outerHTML = weatherHtml(result, {
+      open: state.weatherOpen ?? wideLayout.matches,
+      canConfigure: state.me.is_admin && !state.me.token_session,
+    });
     $("#weather summary").onclick = () => { state.weatherOpen = !$("#weather").open; };
   });
 }
@@ -651,6 +558,24 @@ function logCareModal(taskId, after) {
 
 // ---------------------------------------------------------------- plants list
 
+function plantCard(plant) {
+  const next = plant.next;
+  const due = next?.days <= 0
+    ? `<span class="due-date ${next.state}">${next.days < 0 ? "Overdue" : "Due today"}</span>` : "";
+  const meta = [esc(plant.room), due].filter(Boolean).join(" · ");
+  return `<a class="plant-card" href="#/plant/${plant.id}">${thumb(plant.photo)}
+    <div class="pc-body"><div class="pc-name">${esc(plant.name)}</div>
+      ${meta ? `<div class="pc-meta muted">${meta}</div>` : ""}
+    </div></a>`;
+}
+
+function matchingPlants(plants, room, search) {
+  const inRoom = room ? plants.filter((plant) => (plant.room || "No room") === room) : plants;
+  const query = search.trim().toLowerCase();
+  if (!query) return inRoom;
+  return inRoom.filter(({ name, species, room }) => [name, species, room].join(" ").toLowerCase().includes(query));
+}
+
 async function renderPlants() {
   const revision = ++viewRevision;
   const plants = await api("/api/plants");
@@ -665,20 +590,11 @@ async function renderPlants() {
     <p class="sr-only" id="plant-count" role="status"></p>
     <div class="grid" id="plant-grid"></div>`;
   const draw = () => {
-    const q = state.search.trim().toLowerCase();
-    const list = plants.filter((p) =>
-      (!state.plantRoom || (p.room || "No room") === state.plantRoom) &&
-      (!q || [p.name, p.species, p.room].join(" ").toLowerCase().includes(q)));
+    const list = matchingPlants(plants, state.plantRoom, state.search);
     const total = `${plants.length} plant${plants.length === 1 ? "" : "s"}`;
     $("#plant-count").textContent = list.length === plants.length ? total : `${list.length} of ${total}`;
-    $("#plant-grid").innerHTML = list.length ? list.map((p) => {
-      const n = p.next;
-      return `<a class="plant-card" href="#/plant/${p.id}">${thumb(p.photo)}
-        <div class="pc-body"><div class="pc-name">${esc(p.name)}</div>
-        ${p.room || n?.days <= 0 ? `<div class="pc-meta muted">${esc(p.room)}
-          ${p.room && n?.days <= 0 ? " · " : ""}${n?.days <= 0 ? `<span class="due-date ${n.state}">${n.days < 0 ? "Overdue" : "Due today"}</span>` : ""}</div>` : ""}
-        </div></a>`;
-    }).join("") : `<div class="card empty">${plants.length ? "No plants match." : "No plants yet. Add your first one."}</div>`;
+    $("#plant-grid").innerHTML = list.length ? list.map(plantCard).join("") :
+      `<div class="card empty">${plants.length ? "No plants match." : "No plants yet. Add your first one."}</div>`;
   };
   draw();
   $("#plant-search").oninput = (e) => { state.search = e.target.value; draw(); };
@@ -1001,7 +917,7 @@ async function plantForm(p) {
         }
         closeModal();
         toast(isNew ? "Plant added" : "Saved");
-        if (isNew) location.hash = `#/plant/${saved.id}`; else refresh();
+        if (isNew) location.hash = `#/plant/${saved.id}`; else route();
       } catch (err) { $("#form-error").textContent = err.message; }
     };
   });
@@ -1072,23 +988,12 @@ function photoModal(p, after) {
   });
 }
 
-// ---------------------------------------------------------------- settings
-
-function setSettingsDisclosures(openSections, section) {
-  const expanded = wideLayout.matches;
-  for (const details of $$("#settings-list > details")) {
-    if (expanded) details.removeAttribute("name");
-    details.open = openSections ? openSections.has(details.id) : expanded || details.id === `settings-${section}`;
-    if (!expanded) details.setAttribute("name", "plants-settings");
-  }
-}
-
 wideLayout.addEventListener("change", () => {
   const upcoming = $("#upcoming");
   if (upcoming) upcoming.open = state.upcomingOpen ?? wideLayout.matches;
   const weather = $("details#weather");
   if (weather) weather.open = state.weatherOpen ?? wideLayout.matches;
-  setSettingsDisclosures(null, location.hash.split("/")[2]);
+  setSettingsDisclosures(wideLayout.matches, location.hash.split("/")[2]);
 });
 
 async function renderSettings(section) {
@@ -1105,396 +1010,18 @@ async function renderSettings(section) {
     admin ? api("/api/users") : null,
   ]);
   if (revision !== viewRevision) return;
-  const openSections = section === undefined && $("#settings-list")
-    ? new Set($$("#settings-list > details[open]").map((details) => details.id)) : null;
   state.settings = settings;
-  $("#view").innerHTML = `
-    <h1>Settings</h1>
-    <div id="settings-list">
-    ${admin ? `
-    <details class="settings-item disclosure" id="settings-general">
-      <summary><span>General</span>${chevronIcon}</summary>
-      <div class="disclosure-body stack">
-        <div><label for="s-name">App name</label><div class="row"><input id="s-name" maxlength="60" value="${esc(settings.app_name)}" style="flex:1"><button id="s-name-save">Save</button></div></div>
-        <div><label for="s-units">Units</label><select id="s-units"><option value="imperial" ${settings.units !== "metric" ? "selected" : ""}>°F, inches, mph</option><option value="metric" ${settings.units === "metric" ? "selected" : ""}>°C, mm, km/h</option></select></div>
-      </div>
-    </details>
-    <details class="settings-item disclosure" id="settings-features">
-      <summary><span>Features</span>${chevronIcon}</summary>
-      <div class="disclosure-body stack">
-        <p class="muted" >These switches apply to everyone in your household.</p>
-        <label class="toggle"><input type="checkbox" data-feature="growth_timeline" ${settings.feature_growth_timeline ? "checked" : ""}><span>Growth timeline<small class="muted">each plant's photos side by side, oldest first</small></span></label>
-        <label class="toggle"><input type="checkbox" data-feature="care_suggestions" ${settings.feature_care_suggestions ? "checked" : ""}><span>Care suggestions<small class="muted">photo ID pre-fills water and fertilize intervals</small></span></label>
-        <label class="toggle"><input type="checkbox" data-feature="quick_links" ${settings.feature_quick_links ? "checked" : ""}><span>One-tap quick links<small class="muted">log care from a notification without signing in</small></span></label>
-        <label class="toggle"><input type="checkbox" data-feature="plant_info" ${settings.feature_plant_info ? "checked" : ""}><span>Plant Info<small class="muted">free-text details on each plant; hiding it keeps the text</small></span></label>
-        <label class="toggle"><input type="checkbox" data-feature="token_login" ${settings.feature_token_login ? "checked" : ""}><span>API token sign-in<small class="muted">sign into the website with an existing API token</small></span></label>
-        <p class="hint">A quick link can only log or snooze its own task. Set "App address for links" under Notifications so the links in alerts work away from home. If a link ever ends up somewhere it shouldn't, reset them all.</p>
-        <div><button class="small" id="ql-reset">Reset all quick links</button></div>
-      </div>
-    </details>
-    <details class="settings-item disclosure" id="settings-weather">
-      <summary><span>Weather location</span>${chevronIcon}</summary>
-      <div class="disclosure-body stack">
-        <p class="muted" >${settings.weather_name ? esc(settings.weather_name) : "No location set"}.</p>
-        <div class="row"><input id="wx-q" placeholder="City or town" style="flex:1" aria-label="Search for a city"><button id="wx-search">Search</button></div>
-        <div class="results" id="wx-results"></div>
-        ${settings.weather_name ? '<button class="small ghost" id="wx-clear">Remove location</button>' : ""}
-      </div>
-    </details>
-    <details class="settings-item disclosure" id="settings-seasons">
-      <summary><span>Seasons</span>${chevronIcon}</summary>
-      <div class="disclosure-body stack">
-        <p class="muted" >Choose the winter months and how much to extend care intervals. Individual winter intervals take priority.</p>
-        <div class="row" id="s-months">${MONTHS.map((m, i) => `<label class="toggle" style="min-width:74px"><input type="checkbox" value="${i + 1}" ${settings.winter_months.includes(i + 1) ? "checked" : ""}> ${m}</label>`).join("")}</div>
-        <div><label for="s-mult">Winter stretch</label><select id="s-mult">
-          ${[1, 1.25, 1.5, 2].map((v) => `<option value="${v}" ${settings.winter_multiplier === v ? "selected" : ""}>${v === 1 ? "Off (same intervals)" : "x" + v}</option>`).join("")}</select></div>
-        <button id="s-season-save">Save seasons</button>
-      </div>
-    </details>
-    <details class="settings-item disclosure" id="settings-notifications">
-      <summary><span>Notifications</span>${chevronIcon}</summary>
-      <div class="disclosure-body stack" id="notification-settings" aria-busy="true">
-        <p class="muted" role="status">Loading notification settings…</p>
-      </div>
-    </details>` : ""}
-    <details class="settings-item disclosure" id="settings-push">
-      <summary><span>Push notifications</span>${chevronIcon}</summary>
-      <div class="disclosure-body stack">
-        <p class="muted">Get care reminders on this device, even when Plants is closed. Reminders follow the household’s notification schedule.</p>
-        <label class="toggle"><input type="checkbox" id="push-on" disabled> Push on this device</label>
-        <p class="muted" id="push-status">Checking this browser…</p>
-        <div class="row" id="push-actions" hidden><button id="push-test">Send test push</button></div>
-      </div>
-    </details>
-    <details class="settings-item disclosure" id="settings-rooms">
-      <summary><span>Rooms</span>${chevronIcon}</summary>
-      <div class="disclosure-body stack">
-        <div id="rooms">${rooms.map((r) => `<div class="list-row"><span class="grow">${esc(r.name)} <span class="muted">· ${r.plants} plant${r.plants === 1 ? "" : "s"}</span></span>
-          <button class="small" data-rename="${r.id}">Rename</button><button class="small danger" data-delroom="${r.id}">Delete</button></div>`).join("") || '<p class="muted">No rooms yet. Rooms are created when you type one on a plant.</p>'}</div>
-        <div class="row"><input id="room-new" placeholder="New room" maxlength="60" style="flex:1" aria-label="New room name"><button id="room-add">Add room</button></div>
-      </div>
-    </details>
-    <details class="settings-item disclosure" id="settings-tokens">
-      <summary><span>API tokens</span>${chevronIcon}</summary>
-      <div class="disclosure-body stack">
-        <p class="muted">Let a script, home automation, or an AI assistant add plants from a tag photo, read what's due, and log care. <a href="/api/docs" target="_blank" rel="noopener">API docs</a></p>
-        <div id="token-new"></div>
-        <div>${tokens.map((t) => `<div class="list-row"><span class="grow"><b>${esc(t.name)}</b> <span class="muted">${esc(t.prefix)}… · ${t.last_used_at ? "used " + fmtDate(t.last_used_at) : "never used"}</span></span>
-          <button class="small danger" data-revoke="${t.id}">Revoke</button></div>`).join("")}</div>
-        <div class="row"><input id="tok-name" placeholder="Token name, e.g. Assistant" maxlength="60" style="flex:1" aria-label="Token name"><button id="tok-add">Create token</button></div>
-      </div>
-    </details>
-    ${admin ? `
-    <details class="settings-item disclosure" id="settings-users">
-      <summary><span>Users</span>${chevronIcon}</summary>
-      <div class="disclosure-body stack">
-        <p class="muted">Everyone shares one set of plants. Each care entry records who logged it.</p>
-        ${users.map((u) => `<div class="list-row"><span class="grow"><b>${esc(u.username)}</b> <span class="muted">${u.is_admin ? "Administrator" : "Member"}${u.active ? "" : " · disabled"}</span></span>
-          ${u.id === state.me.id ? '<span class="muted">You</span>' : `<button class="small" data-uadmin="${u.id}" data-val="${u.is_admin ? 0 : 1}">${u.is_admin ? "Make member" : "Make admin"}</button>
-          <button class="small" data-uactive="${u.id}" data-val="${u.active ? 0 : 1}">${u.active ? "Disable" : "Enable"}</button>`}
-          <button class="small" data-upw="${u.id}">Password</button></div>`).join("")}
-        <form class="form-grid" id="user-form">
-          <div><label for="u-name">Username</label><input id="u-name" required autocomplete="off"></div>
-          <div><label for="u-pw">Password</label><input id="u-pw" type="password" required minlength="8" autocomplete="new-password"></div>
-          <label class="toggle"><input type="checkbox" id="u-admin"> Administrator</label>
-          <div><button class="primary" type="submit">Add user</button></div>
-        </form>
-      </div>
-    </details>
-    <details class="settings-item disclosure" id="settings-backup">
-      <summary><span>Backup</span>${chevronIcon}</summary>
-      <div class="disclosure-body stack">
-        <p class="muted">Export everything, photos included, as one JSON file. Importing replaces all data and signs everyone out.</p>
-        <div class="row"><a class="btn" href="/api/export" download="plants-backup.json">Export backup</a>
-          <label class="btn" style="margin:0;color:var(--text);font-size:15px">Import backup<input type="file" id="import" accept="application/json,.json" hidden></label></div>
-      </div>
-    </details>` : ""}
-    </div>
-    <div class="mobile-account"><span class="muted">${esc(state.me.username)}</span><button type="button" class="ghost" id="settings-logout">Sign out</button></div>`;
-  setSettingsDisclosures(openSections, section);
-  $("#settings-logout").onclick = () => signOut().catch(fail);
-  bindSettings(admin);
-  if (admin) loadNotificationSettings($("#notification-settings"));
-  initPushSettings(admin);
-}
-
-// Notification settings can fail independently of the rest of Settings.
-async function loadNotificationSettings(panel) {
-  const focused = panel.contains(document.activeElement);
-  const retry = $("#retry-notifications", panel);
-  if (retry) {
-    retry.disabled = true;
-    retry.textContent = "Retrying…";
-  }
-  panel.setAttribute("aria-busy", "true");
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
-  const notify = await api("/api/notifications", { signal: controller.signal })
-    .catch(() => null)
-    .finally(() => clearTimeout(timeout));
-  if (!panel.isConnected) return;
-  panel.removeAttribute("aria-busy");
-  const restoreFocus = focused && [retry, document.body].includes(document.activeElement);
-
-  if (!notify) {
-    panel.innerHTML = `<p class="muted" role="status">Notification settings could not be loaded.</p>
-      <button type="button" id="retry-notifications">Try again</button>`;
-    const button = $("#retry-notifications", panel);
-    button.onclick = () => loadNotificationSettings(panel);
-    if (restoreFocus) button.focus({ preventScroll: true });
-    return;
-  }
-
-  renderNotificationSettings(panel, notify);
-  if (restoreFocus) $("#n-urls", panel).focus({ preventScroll: true });
-}
-
-function renderNotificationSettings(panel, notify) {
-  const hours = (sel) => Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === sel ? "selected" : ""}>${String(h).padStart(2, "0")}:00</option>`).join("");
-  panel.innerHTML = `
-    <p class="muted">Uses <a href="https://github.com/caronc/apprise/wiki" target="_blank" rel="noopener">Apprise</a> URLs, one per line: ntfy, Gotify, Pushover, email, Discord, Telegram and more. Alerts say "check soil", never "water now".</p>
-    <div><label for="n-urls">Apprise URLs</label><textarea id="n-urls" placeholder="ntfys://ntfy.example.com/plants&#10;pover://user@token">${esc(notify.notify_urls)}</textarea></div>
-    <div class="form-grid">
-      <div><label for="n-mode">Style</label><select id="n-mode"><option value="digest" ${notify.notify_mode === "digest" ? "selected" : ""}>One daily digest</option><option value="each" ${notify.notify_mode === "each" ? "selected" : ""}>One alert per plant</option></select></div>
-      <div><label for="n-hour">Send from</label><select id="n-hour">${hours(notify.notify_hour)}</select></div>
-      <div><label for="n-qs">Quiet hours start</label><select id="n-qs">${hours(notify.quiet_start)}</select></div>
-      <div><label for="n-qe">Quiet hours end</label><select id="n-qe">${hours(notify.quiet_end)}</select></div>
-      <div><label for="n-rep">Repeat overdue every (days, 0 = never)</label><input id="n-rep" type="number" min="0" max="30" inputmode="numeric" value="${notify.overdue_repeat_days}"></div>
-      <div><label for="n-url">App address for links (optional)</label><input id="n-url" type="url" placeholder="https://plants.example.com" value="${esc(notify.public_url)}"></div>
-    </div>
-    <div class="row"><button id="n-save">Save notifications</button><button id="n-test">Send test</button></div>`;
-  const notifyBody = () => ({
-    notify_urls: $("#n-urls").value, notify_mode: $("#n-mode").value, notify_hour: Number($("#n-hour").value),
-    quiet_start: Number($("#n-qs").value), quiet_end: Number($("#n-qe").value),
-    overdue_repeat_days: Number($("#n-rep").value || 0), public_url: $("#n-url").value,
+  showSettings({ settings, rooms, tokens, users, user: state.me }, { expanded: wideLayout.matches, section }, {
+    api, refresh: renderSettings, signOut,
+    settingsChanged(updated) {
+      state.settings = updated;
+      setAppName(updated.app_name);
+    },
+    backupRestored() {
+      state.me = null;
+      showAuth();
+    },
   });
-  $("#n-save").onclick = async () => {
-    try { await api("/api/notifications", { method: "PUT", body: notifyBody() }); toast("Notifications saved"); } catch (err) { fail(err); }
-  };
-  $("#n-test").onclick = async () => {
-    try { await api("/api/notifications", { method: "PUT", body: notifyBody() }); await api("/api/notifications/test", { method: "POST" }); toast("Test sent"); } catch (err) { fail(err); }
-  };
-}
-
-function bindSettings(admin) {
-  const saveSettings = async (body, msg = "Saved") => {
-    try { state.settings = await api("/api/settings", { method: "PUT", body }); toast(msg); } catch (err) { fail(err); }
-  };
-  if (admin) {
-    $("#s-name-save").onclick = async () => { await saveSettings({ app_name: $("#s-name").value }); $("#app-name").textContent = state.settings.app_name; document.title = state.settings.app_name; };
-    $("#s-units").onchange = () => saveSettings({ units: $("#s-units").value });
-    $$("[data-feature]").forEach((cb) => (cb.onchange = () => saveSettings({ [`feature_${cb.dataset.feature}`]: cb.checked }, cb.checked ? "Turned on" : "Turned off")));
-    $("#ql-reset").onclick = async () => {
-      if (!confirm("Reset every quick link? Links already sent in old notifications stop working.")) return;
-      try { const r = await api("/api/quick-links/reset", { method: "POST" }); toast(`Reset ${r.reset} link${r.reset === 1 ? "" : "s"}`); } catch (err) { fail(err); }
-    };
-    const search = async () => {
-      const q = $("#wx-q").value.trim();
-      if (q.length < 2) return;
-      try {
-        const res = await api(`/api/weather/search?q=${encodeURIComponent(q)}`);
-        $("#wx-results").innerHTML = res.length ? res.map((r, i) => `<button data-wx="${i}">${esc(r.label)}</button>`).join("") : '<p class="muted">No matches.</p>';
-        $$("[data-wx]").forEach((b) => (b.onclick = async () => {
-          const r = res[Number(b.dataset.wx)];
-          await saveSettings({ weather_name: r.label, weather_lat: r.latitude, weather_lon: r.longitude }, "Location saved");
-          renderSettings();
-        }));
-      } catch (err) { fail(err); }
-    };
-    $("#wx-search").onclick = search;
-    $("#wx-q").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); search(); } };
-    if ($("#wx-clear")) $("#wx-clear").onclick = async () => { await saveSettings({ clear_weather: true }, "Location removed"); renderSettings(); };
-    $("#s-season-save").onclick = () => saveSettings({
-      winter_months: $$("#s-months input:checked").map((i) => Number(i.value)),
-      winter_multiplier: Number($("#s-mult").value),
-    });
-    $$("[data-uadmin]").forEach((b) => (b.onclick = () => updateUser(b.dataset.uadmin, { is_admin: b.dataset.val === "1" })));
-    $$("[data-uactive]").forEach((b) => (b.onclick = () => updateUser(b.dataset.uactive, { active: b.dataset.val === "1" })));
-    $$("[data-upw]").forEach((b) => (b.onclick = () => {
-      const pw = prompt("New password (at least 8 characters)");
-      if (pw) updateUser(b.dataset.upw, { password: pw });
-    }));
-    $("#user-form").onsubmit = async (e) => {
-      e.preventDefault();
-      try {
-        await api("/api/users", { method: "POST", body: { username: $("#u-name").value, password: $("#u-pw").value, is_admin: $("#u-admin").checked } });
-        toast("User added"); renderSettings();
-      } catch (err) { fail(err); }
-    };
-    $("#import").onchange = async (e) => {
-      const file = e.target.files[0];
-      if (!file || !confirm("Replace ALL current data with this backup?")) return;
-      try {
-        const data = JSON.parse(await file.text());
-        await api("/api/import", { method: "POST", body: data });
-        toast("Backup restored. Sign in again.");
-        state.me = null;
-        showAuth();
-      } catch (err) { fail(err); }
-    };
-  }
-  $$("[data-rename]").forEach((b) => (b.onclick = async () => {
-    const name = prompt("Room name");
-    if (!name) return;
-    try { await api(`/api/rooms/${b.dataset.rename}`, { method: "PUT", body: { name } }); renderSettings(); } catch (err) { fail(err); }
-  }));
-  $$("[data-delroom]").forEach((b) => (b.onclick = async () => {
-    if (!confirm("Delete this room? Its plants stay, just without a room.")) return;
-    try { await api(`/api/rooms/${b.dataset.delroom}`, { method: "DELETE" }); renderSettings(); } catch (err) { fail(err); }
-  }));
-  $("#room-add").onclick = async () => {
-    const name = $("#room-new").value.trim();
-    if (!name) return;
-    try { await api("/api/rooms", { method: "POST", body: { name } }); renderSettings(); } catch (err) { fail(err); }
-  };
-  $$("[data-revoke]").forEach((b) => (b.onclick = async () => {
-    if (!confirm("Revoke this token? Anything using it stops working.")) return;
-    try { await api(`/api/tokens/${b.dataset.revoke}`, { method: "DELETE" }); renderSettings(); } catch (err) { fail(err); }
-  }));
-  $("#tok-add").onclick = async () => {
-    const name = $("#tok-name").value.trim();
-    if (!name) return toast("Name the token first");
-    try {
-      const t = await api("/api/tokens", { method: "POST", body: { name } });
-      await renderSettings();
-      $("#token-new").innerHTML = `<p><b>Copy this token now.</b> It won't be shown again.</p><div class="token-new">${esc(t.token)}</div>`;
-    } catch (err) { fail(err); }
-  };
-}
-
-async function updateUser(id, body) {
-  try { await api(`/api/users/${id}`, { method: "PUT", body }); toast("User updated"); renderSettings(); } catch (err) { fail(err); }
-}
-
-// ---------------------------------------------------------------- start
-
-// ---------------------------------------------------------------- browser push
-
-function isIOS() {
-  return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-}
-
-function isStandalone() {
-  return window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
-}
-
-// Empty string when this browser can do push; otherwise why not, in plain words.
-function pushUnsupportedReason() {
-  if (!window.isSecureContext) return "Push needs HTTPS. Open Plants at its https:// address (through your reverse proxy) to turn it on.";
-  const has = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
-  if (isIOS() && !isStandalone()) return "On iPhone and iPad, add Plants to your Home Screen first (Share, then Add to Home Screen), open it from there, and turn push on in Settings.";
-  if (!has) return "This browser doesn't support push notifications.";
-  return "";
-}
-
-function b64urlToBytes(value) {
-  const pad = "=".repeat((4 - (value.length % 4)) % 4);
-  const raw = atob((value + pad).replace(/-/g, "+").replace(/_/g, "/"));
-  return Uint8Array.from(raw, (ch) => ch.charCodeAt(0));
-}
-
-function bytesToB64url(buf) {
-  return btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-async function currentPushSubscription() {
-  if (pushUnsupportedReason()) return null;
-  const reg = await navigator.serviceWorker.getRegistration();
-  return reg ? reg.pushManager.getSubscription() : null;
-}
-
-async function pushOff() {
-  const sub = await currentPushSubscription();
-  if (!sub) return;
-  await api("/api/push/unsubscribe", { method: "POST", body: { endpoint: sub.endpoint }, allow401: true }).catch(() => {});
-  await sub.unsubscribe();
-}
-
-async function pushOn(publicKey) {
-  const reg = await navigator.serviceWorker.ready;
-  let sub = await reg.pushManager.getSubscription();
-  // A subscription made with old server keys can't receive pushes signed with new ones.
-  if (sub && sub.options.applicationServerKey && bytesToB64url(sub.options.applicationServerKey) !== publicKey.replace(/=+$/, "")) {
-    await sub.unsubscribe();
-    sub = null;
-  }
-  if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64urlToBytes(publicKey) });
-  const json = sub.toJSON();
-  return api("/api/push/subscribe", { method: "POST", body: { endpoint: json.endpoint, keys: json.keys } });
-}
-
-async function initPushSettings(admin) {
-  const box = $("#push-on");
-  const status = $("#push-status");
-  const actions = $("#push-actions");
-  if (!box) return;
-  const show = (text, checked, enabled) => {
-    status.textContent = text;
-    box.checked = checked;
-    box.disabled = !enabled;
-    actions.hidden = !checked;
-  };
-  const reason = pushUnsupportedReason();
-  if (reason) return show(reason, false, false);
-  let sub = null;
-  let info;
-  try {
-    sub = await currentPushSubscription();
-    info = await api("/api/push" + (sub ? "?endpoint=" + encodeURIComponent(sub.endpoint) : ""));
-  } catch (err) {
-    return show("Couldn't check push status: " + (err.message || err), false, false);
-  }
-  if (!info.configured) {
-    const why = info.problem ? ` (${info.problem})` : "";
-    return show(admin
-      ? `Push isn't set up on the server yet${why}. Add VAPID keys to your compose file; the readme shows how.`
-      : `Push isn't set up on the server yet${why}. Ask an administrator to turn it on.`, false, false);
-  }
-  if (Notification.permission === "denied") {
-    return show("Notifications are blocked for this site. Allow them in your browser's site settings, then reload.", false, false);
-  }
-  const others = (n) => (n > 0 ? ` You have push on ${n} other device${n === 1 ? "" : "s"}.` : "");
-  const on = Boolean(sub && info.subscribed);
-  if (on) show("On for this device." + (info.last_error ? ` Last delivery failed: ${info.last_error}.` : "") + others(info.devices - 1), true, true);
-  else show("Off for this device." + others(info.devices), false, true);
-
-  box.onchange = async () => {
-    box.disabled = true;
-    try {
-      if (box.checked) {
-        // Ask straight from the tap, before any other await, so browsers treat it as a user gesture.
-        const permission = await Notification.requestPermission();
-        if (permission !== "granted") {
-          show(permission === "denied"
-            ? "Notifications are blocked for this site. Allow them in your browser's site settings, then reload."
-            : "Permission wasn't granted, so push stays off.", false, permission !== "denied");
-          return;
-        }
-        const res = await pushOn(info.public_key);
-        show("On for this device." + others(res.devices - 1), true, true);
-        toast("Push is on for this device");
-      } else {
-        await pushOff();
-        const res = await api("/api/push");
-        show("Off for this device." + others(res.devices), false, true);
-        toast("Push is off for this device");
-      }
-    } catch (err) {
-      show("Couldn't change push: " + (err.message || err), false, true);
-    }
-  };
-  $("#push-test").onclick = async () => {
-    try {
-      const current = await currentPushSubscription();
-      if (!current) throw new Error("This device isn't subscribed. Turn push on first.");
-      await api("/api/push/test", { method: "POST", body: { endpoint: current.endpoint } });
-      toast("Test push sent");
-    } catch (err) {
-      fail(err);
-      initPushSettings(admin);
-    }
-  };
 }
 
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});

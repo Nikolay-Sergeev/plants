@@ -1,7 +1,11 @@
 const CACHE_PREFIX = "plants-static-";
-const CACHE = CACHE_PREFIX + "v14";
+const CACHE = CACHE_PREFIX + "v15";
 const ASSETS = [
-  "/static/app.js?v=care-ui-9",
+  "/static/app.js?v=care-ui-10",
+  "/static/push.js?v=1",
+  "/static/settings.js?v=1",
+  "/static/ui.js?v=1",
+  "/static/weather.js?v=1",
   "/static/style.css?v=care-ui-9",
   "/static/icon.svg?v=2",
   "/static/manifest.json?v=2",
