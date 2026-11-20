@@ -1,8 +1,8 @@
 const CACHE_PREFIX = "plants-static-";
-const CACHE = CACHE_PREFIX + "v11";
+const CACHE = CACHE_PREFIX + "v12";
 const ASSETS = [
-  "/static/app.js?v=care-ui-6",
-  "/static/style.css?v=care-ui-6",
+  "/static/app.js?v=care-ui-7",
+  "/static/style.css?v=care-ui-7",
   "/static/icon.svg?v=2",
   "/static/manifest.json?v=2",
   "/static/apple-touch-icon.png",

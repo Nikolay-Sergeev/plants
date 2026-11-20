@@ -1691,7 +1691,7 @@ def fetch_weather(lat: float, lon: float, imperial: bool) -> dict[str, Any]:
     params = {
         "latitude": f"{lat:.4f}",
         "longitude": f"{lon:.4f}",
-        "current": "temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m",
+        "current": "temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m,is_day",
         "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max",
         "timezone": "auto",
         "forecast_days": "5",
@@ -1724,6 +1724,7 @@ def fetch_weather(lat: float, lon: float, imperial: bool) -> dict[str, Any]:
         "wind": cur.get("wind_speed_10m"),
         "summary": WMO.get(cur.get("weather_code"), ""),
         "code": cur.get("weather_code"),
+        "is_day": cur.get("is_day"),
     }
     week_rain = round(sum(x["precip"] or 0 for x in daily), 2)
     return {

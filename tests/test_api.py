@@ -1,6 +1,7 @@
 import os
 import urllib.error
 from datetime import date, timedelta
+from urllib.parse import parse_qs, urlsplit
 
 os.environ["PLANTS_DATA_DIR"] = "/tmp/plants-pytest-data"
 os.environ["PLANTS_NOTIFY_WORKER"] = "false"
@@ -368,14 +369,20 @@ def test_weather_not_configured_and_offline(tmp_path):
 def test_weather_parsing(monkeypatch):
     sample = {
         "current": {"temperature_2m": 70.2, "relative_humidity_2m": 25, "precipitation": 0,
-                    "weather_code": 3, "wind_speed_10m": 5},
+                    "weather_code": 3, "wind_speed_10m": 5, "is_day": 0},
         "daily": {"time": [days_ago(-i) for i in range(5)], "weather_code": [61, 3, 0, 0, 0],
                   "temperature_2m_max": [80, 95, 70, 70, 70], "temperature_2m_min": [60, 60, 35, 60, 60],
                   "precipitation_sum": [0.4, 0, 0, 0, 0], "precipitation_probability_max": [80, 0, 0, 0, 0]},
     }
-    monkeypatch.setattr(main, "http_json", lambda url: sample)
+    def weather_response(url):
+        current = parse_qs(urlsplit(url).query)["current"][0].split(",")
+        assert "is_day" in current
+        return sample
+
+    monkeypatch.setattr(main, "http_json", weather_response)
     w = main.fetch_weather(1, 2, True)
     assert w["current"]["summary"] == "Cloudy"
+    assert w["current"]["is_day"] == 0
     assert w["daily"][0]["label"] == "today"
     assert "Rain likely today" in w["hint"] and "Hot days" in w["hint"] and "Cold nights" in w["hint"]
     assert "Dry air" in w["hint"]

@@ -446,7 +446,7 @@ def test_weather_forecast_displays_conditions_and_missing_values(app_url):
     forecast = {
         "configured": True, "location": "Test City, Test Region",
         "current": {"temperature": 23.4, "code": 0, "summary": "Clear",
-                    "humidity": 25, "wind": 16, "precipitation": 0},
+                    "humidity": 25, "wind": 16, "precipitation": 0, "is_day": 0},
         "daily": [
             {"short": "Today", "code": 0, "summary": "Clear", "low": 14, "high": 25, "precip_probability": 0},
             {"short": "Sat", "code": 61, "summary": "Light rain", "low": None, "high": 22,
@@ -470,6 +470,8 @@ def test_weather_forecast_displays_conditions_and_missing_values(app_url):
         weather.locator("summary").click()
         expect(weather.get_by_role("heading", name="Test City")).to_be_visible()
         expect(weather.get_by_text("High 25° · Low 14°")).to_be_visible()
+        expect(weather.locator(".wx-current-symbol .wx-night")).to_be_visible()
+        expect(weather.get_by_role("listitem").filter(has_text="Today").locator(".wx-clear")).to_be_visible()
         expect(weather.get_by_role("listitem")).to_have_count(5)
         saturday = weather.get_by_role("listitem").filter(has_text="Sat")
         expect(saturday).to_contain_text("65% chance of precipitation")
