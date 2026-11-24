@@ -1,7 +1,7 @@
 const CACHE_PREFIX = "plants-static-";
-const CACHE = CACHE_PREFIX + "v15";
+const CACHE = CACHE_PREFIX + "v16";
 const ASSETS = [
-  "/static/app.js?v=care-ui-10",
+  "/static/app.js?v=care-ui-11",
   "/static/push.js?v=1",
   "/static/settings.js?v=1",
   "/static/ui.js?v=1",
@@ -36,7 +36,7 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (request.method !== "GET" || url.origin !== self.location.origin) return;
 
-  // Cache only public app assets. Care data and quick links go directly to the server.
+  // Cache only the public app shell and assets. /login must reach the server directly.
   if (ASSETS.includes(url.pathname + url.search)) {
     event.respondWith(caches.open(CACHE).then(async (cache) => (await cache.match(request)) || fetch(request)));
   } else if (request.mode === "navigate" && url.pathname === "/") {

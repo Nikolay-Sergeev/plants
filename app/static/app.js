@@ -192,6 +192,7 @@ async function boot() {
     state.settings = await api("/api/settings");
     setAppName(state.settings.app_name);
   }
+  if (location.pathname === "/login") history.replaceState(history.state, "", `/${location.hash}`);
   $("#top").hidden = false;
   $("#top").classList.toggle("token-session", state.me.token_session === true);
   $("#user-badge").textContent = state.me.username + (state.me.token_session ? " (token)" : "");
@@ -1027,13 +1028,18 @@ async function renderSettings(section) {
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
 
 function start() {
-  boot().catch(() => {
+  const atLogin = location.pathname === "/login";
+  const load = atLogin ? showAuth : boot;
+  load().catch(() => {
     state.me = null;
     $("#top").hidden = true;
     $("#view").innerHTML = `<section class="card auth stack">
       <h1>Can't reach Plants</h1>
       <p>Check your connection to the Plants server and try again.</p>
-      <button class="primary" id="retry" type="button">Try again</button>
+      <div class="row">
+        <button class="primary" id="retry" type="button">Try again</button>
+        ${atLogin ? "" : `<a class="btn" href="/login${esc(location.hash)}">Open sign-in</a>`}
+      </div>
     </section>`;
     $("#retry").onclick = () => {
       $("#view").innerHTML = '<p class="muted" role="status">Loading Plants…</p>';

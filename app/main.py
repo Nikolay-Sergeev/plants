@@ -2632,5 +2632,6 @@ def service_worker():
 
 
 @app.get("/", include_in_schema=False)
+@app.get("/login", include_in_schema=False)
 def index():
     return FileResponse(BASE / "static" / "index.html", headers={"Cache-Control": "no-cache"})

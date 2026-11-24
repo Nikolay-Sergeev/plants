@@ -619,3 +619,35 @@ def test_installed_shell_can_retry_after_offline_launch(app_url):
         page.get_by_role("button", name="Try again").click()
         expect(page.get_by_role("heading", name="Today", exact=True)).to_be_visible()
         browser.close()
+
+
+def test_connection_error_can_open_fresh_sign_in(app_url):
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        sign_in(page, app_url)
+        page.wait_for_function("navigator.serviceWorker.controller !== null")
+        page.get_by_role("link", name="Plants", exact=True).click()
+
+        session_check = f"{app_url}/api/me"
+        page.route(session_check, lambda route: route.abort())
+        destination = "#/plants"
+        page.reload(wait_until="domcontentloaded")
+        expect(page.get_by_role("heading", name="Can't reach Plants")).to_be_visible()
+
+        recovery = page.get_by_role("link", name="Open sign-in")
+        expect(recovery).to_be_visible()
+        with page.expect_navigation(wait_until="domcontentloaded") as navigation:
+            recovery.click()
+        response = navigation.value
+        assert response is not None and response.ok and not response.from_service_worker
+        expect(page).to_have_url(f"{app_url}/login{destination}")
+        expect(page.get_by_role("heading", name="Sign in", exact=True)).to_be_visible()
+
+        page.unroute(session_check)
+        page.get_by_label("Username").fill("admin-test")
+        page.get_by_label("Password").fill("password-123")
+        page.get_by_role("button", name="Sign in", exact=True).click()
+        expect(page).to_have_url(f"{app_url}/{destination}")
+        expect(page.get_by_role("heading", name="Plants", exact=True)).to_be_visible()
+        browser.close()
